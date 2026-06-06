@@ -236,7 +236,7 @@ impl FileServerState {
             .and_then(|v| {
                 let prefix = v.get(..5.min(v.len()))?.to_ascii_lowercase();
                 if prefix == "basic" {
-                    Some(&v[6..])
+                    v.get(6..)
                 } else {
                     None
                 }

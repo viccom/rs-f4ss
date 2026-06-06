@@ -232,12 +232,12 @@ phase0_auth() {
         fail "Mounts without auth: expected 401, got $code"
     fi
 
-    run_test "GET /api/version — no auth returns 401"
+    run_test "GET /api/version — no auth returns 200 (whitelisted)"
     code=$(api_noauth_code GET /api/version)
-    if [ "$code" = "401" ]; then
-        pass "Version without auth returns 401"
+    if [ "$code" = "200" ]; then
+        pass "Version without auth returns 200"
     else
-        fail "Version without auth: expected 401, got $code"
+        fail "Version without auth: expected 200, got $code"
     fi
 
     # API endpoints with correct auth succeed

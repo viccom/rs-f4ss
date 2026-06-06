@@ -40,7 +40,7 @@ impl AppState {
             .and_then(|v| {
                 let prefix = v.get(..5.min(v.len()))?.to_ascii_lowercase();
                 if prefix == "basic" {
-                    Some(&v[6..])
+                    v.get(6..)
                 } else {
                     None
                 }
@@ -138,7 +138,7 @@ async fn auth_change_password(
     // before updating in-memory state to avoid divergence on failure.
     let new_hash = persistence::sha256_hex(&req.new_password);
     {
-        let auth = state.auth.lock().unwrap();
+        let mut auth = state.auth.lock().unwrap();
 
         // Verify Basic Auth from header (case-insensitive per RFC 7617)
         let auth_header = headers
@@ -147,7 +147,7 @@ async fn auth_change_password(
             .and_then(|v| {
                 let prefix = v.get(..5.min(v.len()))?.to_ascii_lowercase();
                 if prefix == "basic" {
-                    Some(&v[6..])
+                    v.get(6..)
                 } else {
                     None
                 }
@@ -202,12 +202,12 @@ async fn auth_change_password(
                 .into_response();
         }
 
-        // Persist first, then update memory — avoids memory/disk divergence on failure
+        // Persist to disk first (uses store_lock, not auth Mutex — no deadlock),
+        // then update in-memory state, all while holding auth Mutex to prevent races.
         let updated = AuthConfig {
             username: auth.username.clone(),
             password_hash: new_hash.clone(),
         };
-        drop(auth);
         if let Err(e) = persistence::save_auth(&updated, &state.persist_path) {
             tracing::error!("Failed to persist password change: {e}");
             return (
@@ -216,11 +216,6 @@ async fn auth_change_password(
             )
                 .into_response();
         }
-    }
-
-    // Only update in-memory state after successful disk write
-    {
-        let mut auth = state.auth.lock().unwrap();
         auth.password_hash = new_hash;
     }
 
@@ -526,9 +521,9 @@ async fn create_share(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateShareRequest>,
 ) -> impl IntoResponse {
-    let has_user = req.user.as_ref().is_some_and(|s| !s.is_empty());
-    let has_pass = req.pass.as_ref().is_some_and(|s| !s.is_empty());
-    if has_user != has_pass {
+    let clean_user = req.user.filter(|s| !s.is_empty());
+    let clean_pass = req.pass.filter(|s| !s.is_empty());
+    if clean_user.is_some() != clean_pass.is_some() {
         return (
             StatusCode::BAD_REQUEST,
             Json(error_json(
@@ -542,8 +537,8 @@ async fn create_share(
         id: req.id,
         path: req.path,
         addr: req.addr,
-        user: req.user,
-        pass: req.pass.map(|p| persistence::sha256_hex(&p)),
+        user: clean_user,
+        pass: clean_pass.map(|p| persistence::sha256_hex(&p)),
         read_only: req.read_only,
     };
     match state.shares.add(config) {
@@ -614,6 +609,16 @@ async fn update_share(
             .map(|p| persistence::sha256_hex(&p))
             .or_else(|| existing.pass.clone())
     };
+
+    if new_user.is_some() != new_pass.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(error_json(
+                "user and pass must both be provided or both be empty",
+            )),
+        )
+            .into_response();
+    }
 
     let updated = ShareConfig {
         id: id.clone(),
