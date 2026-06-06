@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -118,6 +119,12 @@ impl From<ShareConfig> for ShareConfigSer {
 // Internal read/write
 // ---------------------------------------------------------------------------
 
+/// Global lock to serialize read-modify-write cycles on the config file.
+fn store_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
 fn read_store(path: &Path) -> AppStore {
     let data = match fs::read_to_string(path) {
         Ok(d) => d,
@@ -146,31 +153,21 @@ fn read_store(path: &Path) -> AppStore {
     AppStore::default()
 }
 
-fn write_store(store: &AppStore, path: &Path) {
+fn write_store(store: &AppStore, path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         if let Err(e) = fs::create_dir_all(parent) {
-            warn!("Cannot create config dir {}: {e}", parent.display());
-            return;
+            return Err(format!("Cannot create config dir {}: {e}", parent.display()));
         }
     }
 
-    let json = match serde_json::to_string_pretty(store) {
-        Ok(j) => j,
-        Err(e) => {
-            warn!("Cannot serialize config: {e}");
-            return;
-        }
-    };
+    let json = serde_json::to_string_pretty(store)
+        .map_err(|e| format!("Cannot serialize config: {e}"))?;
 
     let tmp_path = path.with_extension("tmp");
-    if let Err(e) = fs::write(&tmp_path, &json) {
-        warn!("Cannot write config {}: {e}", tmp_path.display());
-        return;
-    }
-    if let Err(e) = fs::rename(&tmp_path, path) {
-        warn!("Cannot rename config: {e}");
-        return;
-    }
+    fs::write(&tmp_path, &json)
+        .map_err(|e| format!("Cannot write config {}: {e}", tmp_path.display()))?;
+    fs::rename(&tmp_path, path)
+        .map_err(|e| format!("Cannot rename config: {e}"))?;
 
     #[cfg(unix)]
     {
@@ -179,6 +176,7 @@ fn write_store(store: &AppStore, path: &Path) {
             warn!("Cannot set config permissions: {e}");
         }
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -186,9 +184,12 @@ fn write_store(store: &AppStore, path: &Path) {
 // ---------------------------------------------------------------------------
 
 pub fn save(entries: &DashMap<String, MountEntry>, path: &Path) {
+    let _guard = store_lock().lock().unwrap();
     let mut store = read_store(path);
     store.mounts = entries.iter().map(|r| r.value().clone()).collect();
-    write_store(&store, path);
+    if let Err(e) = write_store(&store, path) {
+        warn!("{e}");
+    }
 }
 
 pub fn load(path: &Path) -> Vec<MountEntry> {
@@ -205,10 +206,11 @@ pub fn load_auth(path: &Path) -> AuthConfig {
 }
 
 #[cfg(feature = "api")]
-pub fn save_auth(auth: &AuthConfig, path: &Path) {
+pub fn save_auth(auth: &AuthConfig, path: &Path) -> Result<(), String> {
+    let _guard = store_lock().lock().unwrap();
     let mut store = read_store(path);
     store.auth = Some(auth.clone());
-    write_store(&store, path);
+    write_store(&store, path)
 }
 
 // ---------------------------------------------------------------------------
@@ -217,12 +219,15 @@ pub fn save_auth(auth: &AuthConfig, path: &Path) {
 
 #[cfg(feature = "serve")]
 pub fn save_shares(entries: &DashMap<String, ShareConfig>, path: &Path) {
+    let _guard = store_lock().lock().unwrap();
     let mut store = read_store(path);
     store.shares = entries
         .iter()
         .map(|r| ShareConfigSer::from(r.value().clone()))
         .collect();
-    write_store(&store, path);
+    if let Err(e) = write_store(&store, path) {
+        warn!("{e}");
+    }
 }
 
 #[cfg(feature = "serve")]
@@ -331,7 +336,7 @@ mod tests {
         };
         let mut store = read_store(&path);
         store.shares = vec![share_cfg];
-        write_store(&store, &path);
+        write_store(&store, &path).unwrap();
 
         // Reload mounts — should still be there
         let loaded_mounts = load(&path);

@@ -124,14 +124,6 @@ async fn auth_change_password(
     headers: axum::http::HeaderMap,
     Json(req): Json<ChangePasswordRequest>,
 ) -> impl IntoResponse {
-    if !state.check_basic_auth(&headers) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(error_json("Unauthorized")),
-        )
-            .into_response();
-    }
-
     if req.old_password == req.new_password {
         return (
             StatusCode::BAD_REQUEST,
@@ -148,24 +140,52 @@ async fn auth_change_password(
             .into_response();
     }
 
-    let old_hash = persistence::sha256_hex(&req.old_password);
-    let new_hash = persistence::sha256_hex(&req.new_password);
+    // Validate Basic Auth header and old_password under a single lock hold
+    // to eliminate TOCTOU race.
+    let auth_clone = {
+        let mut auth = state.auth.lock().unwrap();
 
-    let mut auth = state.auth.lock().unwrap();
-    if old_hash != auth.password_hash {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(error_json("Old password is incorrect")),
-        )
-            .into_response();
+        // Verify Basic Auth from header
+        let auth_header = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Basic "));
+        let Some(encoded) = auth_header else {
+            return (StatusCode::UNAUTHORIZED, Json(error_json("Unauthorized"))).into_response();
+        };
+        let decoded = match STANDARD.decode(encoded) {
+            Ok(d) => d,
+            Err(_) => return (StatusCode::UNAUTHORIZED, Json(error_json("Unauthorized"))).into_response(),
+        };
+        let credentials = match String::from_utf8(decoded) {
+            Ok(s) => s,
+            Err(_) => return (StatusCode::UNAUTHORIZED, Json(error_json("Unauthorized"))).into_response(),
+        };
+        let Some((user, pass)) = credentials.split_once(':') else {
+            return (StatusCode::UNAUTHORIZED, Json(error_json("Unauthorized"))).into_response();
+        };
+        let header_hash = persistence::sha256_hex(pass);
+        if user != auth.username || header_hash != auth.password_hash {
+            return (StatusCode::UNAUTHORIZED, Json(error_json("Unauthorized"))).into_response();
+        }
+
+        // Verify old_password from body
+        let old_hash = persistence::sha256_hex(&req.old_password);
+        if old_hash != auth.password_hash {
+            return (StatusCode::UNAUTHORIZED, Json(error_json("Old password is incorrect"))).into_response();
+        }
+
+        auth.password_hash = persistence::sha256_hex(&req.new_password);
+        auth.clone()
+    };
+
+    match persistence::save_auth(&auth_clone, &state.persist_path) {
+        Ok(()) => Json(serde_json::json!({"message": "Password changed"})).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to persist password change: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(error_json("Failed to save password change"))).into_response()
+        }
     }
-
-    auth.password_hash = new_hash;
-    let auth_clone = auth.clone();
-    drop(auth);
-
-    persistence::save_auth(&auth_clone, &state.persist_path);
-    Json(serde_json::json!({"message": "Password changed"})).into_response()
 }
 
 #[cfg(feature = "serve")]

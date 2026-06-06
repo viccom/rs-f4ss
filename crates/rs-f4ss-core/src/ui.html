@@ -329,9 +329,9 @@ createApp({setup(){
   const showChangePass=ref(false),oldPass=ref(''),newPass=ref(''),newPass2=ref(''),passError=ref('')
   let timer=null,nextId=0
 
-  // Restore credentials from localStorage
+  // Restore credentials from localStorage (encoded auth header, not plaintext)
   const saved=localStorage.getItem('rs-f4ss-auth')
-  if(saved){try{const a=JSON.parse(saved);if(a.u&&a.p){loginUser.value=a.u;loginPass.value=a.p}}catch{}}
+  if(saved){try{const a=JSON.parse(saved);if(a.u&&a.h){loginUser.value=a.u;loginPass.value=a.h}}catch{}}
 
   function b64(s){return btoa(unescape(encodeURIComponent(s)))}
   function authHeader(){return'Basic '+b64(loginUser.value+':'+loginPass.value)}
@@ -341,7 +341,7 @@ createApp({setup(){
     busy.value=true;loginError.value=''
     try{
       const res=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:loginUser.value,password:loginPass.value})})
-      if(res.ok){loggedIn.value=true;localStorage.setItem('rs-f4ss-auth',JSON.stringify({u:loginUser.value,p:loginPass.value}));refresh();startPoll()}
+      if(res.ok){loggedIn.value=true;localStorage.setItem('rs-f4ss-auth',JSON.stringify({u:loginUser.value,h:b64(loginUser.value+':'+loginPass.value)}));refresh();startPoll()}
       else{const d=await res.json().catch(()=>({}));loginError.value=d.error||'登录失败'}
     }catch{loginError.value='无法连接服务器'}
     finally{busy.value=false}
@@ -356,7 +356,7 @@ createApp({setup(){
     busy.value=true
     try{
       const res=await fetch('/api/auth/password',{method:'POST',headers:{'Content-Type':'application/json','Authorization':authHeader()},body:JSON.stringify({old_password:oldPass.value,new_password:newPass.value})})
-      if(res.ok){toast('密码已修改，请重新登录','success');loginPass.value=newPass.value;localStorage.setItem('rs-f4ss-auth',JSON.stringify({u:loginUser.value,p:loginPass.value}));showChangePass.value=false;oldPass.value='';newPass.value='';newPass2.value=''}
+      if(res.ok){toast('密码已修改','success');loginPass.value=newPass.value;localStorage.setItem('rs-f4ss-auth',JSON.stringify({u:loginUser.value,h:b64(loginUser.value+':'+loginPass.value)}));showChangePass.value=false;oldPass.value='';newPass.value='';newPass2.value=''}
       else{const d=await res.json().catch(()=>({}));passError.value=d.error||'修改失败'}
     }catch{passError.value='网络错误'}
     finally{busy.value=false}

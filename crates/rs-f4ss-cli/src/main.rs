@@ -688,6 +688,9 @@ fn handle_serve(listen: &str, config_path: Option<&str>) -> Result<(), Box<dyn s
 
     let auth = rs_f4ss_core::persistence::load_auth(&path);
     tracing::info!("Auth user: {}", auth.username);
+    if auth.username == "admin" && auth.password_hash == rs_f4ss_core::persistence::sha256_hex("admin") {
+        tracing::warn!("Using default credentials (admin:admin). Please change the password via Web UI or CLI.");
+    }
 
     let state = std::sync::Arc::new(rs_f4ss_core::api::AppState {
         mounts: {
