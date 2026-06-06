@@ -342,8 +342,14 @@ fn run_with_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 std::process::exit(1);
             }
         }
-        Some(Commands::Mount { ref action, ref api_user, ref api_pass }) => match action {
-            MountAction::List { ref api } => return api_list(api, api_user.as_deref(), api_pass.as_deref()),
+        Some(Commands::Mount {
+            ref action,
+            ref api_user,
+            ref api_pass,
+        }) => match action {
+            MountAction::List { ref api } => {
+                return api_list(api, api_user.as_deref(), api_pass.as_deref())
+            }
             MountAction::Add {
                 ref id,
                 ref url,
@@ -371,11 +377,21 @@ fn run_with_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 return api_add(api, api_user.as_deref(), api_pass.as_deref(), id, body);
             }
-            MountAction::Del { ref id, ref api } => return api_del(api, api_user.as_deref(), api_pass.as_deref(), id),
-            MountAction::Start { ref id, ref api } => return api_start(api, api_user.as_deref(), api_pass.as_deref(), id),
-            MountAction::Stop { ref id, ref api } => return api_stop(api, api_user.as_deref(), api_pass.as_deref(), id),
+            MountAction::Del { ref id, ref api } => {
+                return api_del(api, api_user.as_deref(), api_pass.as_deref(), id)
+            }
+            MountAction::Start { ref id, ref api } => {
+                return api_start(api, api_user.as_deref(), api_pass.as_deref(), id)
+            }
+            MountAction::Stop { ref id, ref api } => {
+                return api_stop(api, api_user.as_deref(), api_pass.as_deref(), id)
+            }
         },
-        Some(Commands::Share { ref action, ref api_user, ref api_pass }) => match action {
+        Some(Commands::Share {
+            ref action,
+            ref api_user,
+            ref api_pass,
+        }) => match action {
             ShareAction::Serve {
                 ref path,
                 ref listen,
@@ -392,7 +408,9 @@ fn run_with_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     std::process::exit(1);
                 }
             }
-            ShareAction::List { ref api } => return api_share_list(api, api_user.as_deref(), api_pass.as_deref()),
+            ShareAction::List { ref api } => {
+                return api_share_list(api, api_user.as_deref(), api_pass.as_deref())
+            }
             ShareAction::Add {
                 ref id,
                 ref path,
@@ -416,9 +434,15 @@ fn run_with_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 return api_share_add(api, api_user.as_deref(), api_pass.as_deref(), id, body);
             }
-            ShareAction::Del { ref id, ref api } => return api_share_del(api, api_user.as_deref(), api_pass.as_deref(), id),
-            ShareAction::Start { ref id, ref api } => return api_share_start(api, api_user.as_deref(), api_pass.as_deref(), id),
-            ShareAction::Stop { ref id, ref api } => return api_share_stop(api, api_user.as_deref(), api_pass.as_deref(), id),
+            ShareAction::Del { ref id, ref api } => {
+                return api_share_del(api, api_user.as_deref(), api_pass.as_deref(), id)
+            }
+            ShareAction::Start { ref id, ref api } => {
+                return api_share_start(api, api_user.as_deref(), api_pass.as_deref(), id)
+            }
+            ShareAction::Stop { ref id, ref api } => {
+                return api_share_stop(api, api_user.as_deref(), api_pass.as_deref(), id)
+            }
         },
         None => {}
     }
@@ -558,7 +582,12 @@ fn http_client() -> reqwest::blocking::Client {
         .expect("failed to create HTTP client")
 }
 
-fn api_get(addr: &str, path: &str, user: Option<&str>, pass: Option<&str>) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+fn api_get(
+    addr: &str,
+    path: &str,
+    user: Option<&str>,
+    pass: Option<&str>,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let url = format!("{}/api{path}", api_base(addr));
     let mut req = http_client().get(&url);
     if let (Some(u), Some(p)) = (user, pass) {
@@ -585,11 +614,15 @@ fn api_post(
     let client = http_client();
     let resp = if let Some(b) = body {
         let mut req = client.post(&url).json(&b);
-        if let (Some(u), Some(p)) = (user, pass) { req = req.basic_auth(u, Some(p)); }
+        if let (Some(u), Some(p)) = (user, pass) {
+            req = req.basic_auth(u, Some(p));
+        }
         req.send()?
     } else {
         let mut req = client.post(&url);
-        if let (Some(u), Some(p)) = (user, pass) { req = req.basic_auth(u, Some(p)); }
+        if let (Some(u), Some(p)) = (user, pass) {
+            req = req.basic_auth(u, Some(p));
+        }
         req.send()?
     };
     let status = resp.status();
@@ -601,10 +634,17 @@ fn api_post(
     Ok(resp_body)
 }
 
-fn api_delete(addr: &str, path: &str, user: Option<&str>, pass: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+fn api_delete(
+    addr: &str,
+    path: &str,
+    user: Option<&str>,
+    pass: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let url = format!("{}/api{path}", api_base(addr));
     let mut req = http_client().delete(&url);
-    if let (Some(u), Some(p)) = (user, pass) { req = req.basic_auth(u, Some(p)); }
+    if let (Some(u), Some(p)) = (user, pass) {
+        req = req.basic_auth(u, Some(p));
+    }
     let resp = req.send()?;
     let status = resp.status();
     if !status.is_success() && status.as_u16() != 204 {
@@ -615,7 +655,11 @@ fn api_delete(addr: &str, path: &str, user: Option<&str>, pass: Option<&str>) ->
     Ok(())
 }
 
-fn api_list(addr: &str, user: Option<&str>, pass: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+fn api_list(
+    addr: &str,
+    user: Option<&str>,
+    pass: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mounts = api_get(addr, "/mounts", user, pass)?;
     let list = mounts.as_array().ok_or("Invalid response")?;
     if list.is_empty() {
@@ -653,20 +697,35 @@ fn api_add(
     Ok(())
 }
 
-fn api_del(addr: &str, user: Option<&str>, pass: Option<&str>, id: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn api_del(
+    addr: &str,
+    user: Option<&str>,
+    pass: Option<&str>,
+    id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let _ = api_post(addr, &format!("/mounts/{id}/stop"), None, user, pass);
     api_delete(addr, &format!("/mounts/{id}"), user, pass)?;
     println!("Deleted mount: {id}");
     Ok(())
 }
 
-fn api_start(addr: &str, user: Option<&str>, pass: Option<&str>, id: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn api_start(
+    addr: &str,
+    user: Option<&str>,
+    pass: Option<&str>,
+    id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     api_post(addr, &format!("/mounts/{id}/start"), None, user, pass)?;
     println!("Starting mount: {id}");
     Ok(())
 }
 
-fn api_stop(addr: &str, user: Option<&str>, pass: Option<&str>, id: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn api_stop(
+    addr: &str,
+    user: Option<&str>,
+    pass: Option<&str>,
+    id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     api_post(addr, &format!("/mounts/{id}/stop"), None, user, pass)?;
     println!("Stopped mount: {id}");
     Ok(())
@@ -688,7 +747,9 @@ fn handle_serve(listen: &str, config_path: Option<&str>) -> Result<(), Box<dyn s
 
     let auth = rs_f4ss_core::persistence::load_auth(&path);
     tracing::info!("Auth user: {}", auth.username);
-    if auth.username == "admin" && auth.password_hash == rs_f4ss_core::persistence::sha256_hex("admin") {
+    if auth.username == "admin"
+        && auth.password_hash == rs_f4ss_core::persistence::sha256_hex("admin")
+    {
         tracing::warn!("Using default credentials (admin:admin). Please change the password via Web UI or CLI.");
     }
 
@@ -820,7 +881,11 @@ fn handle_share(
 // Share API commands
 // ---------------------------------------------------------------------------
 
-fn api_share_list(addr: &str, user: Option<&str>, pass: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+fn api_share_list(
+    addr: &str,
+    user: Option<&str>,
+    pass: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let shares = api_get(addr, "/shares", user, pass)?;
     let list = shares.as_array().ok_or("Invalid response")?;
     if list.is_empty() {
@@ -858,20 +923,35 @@ fn api_share_add(
     Ok(())
 }
 
-fn api_share_del(addr: &str, user: Option<&str>, pass: Option<&str>, id: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn api_share_del(
+    addr: &str,
+    user: Option<&str>,
+    pass: Option<&str>,
+    id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let _ = api_post(addr, &format!("/shares/{id}/stop"), None, user, pass);
     api_delete(addr, &format!("/shares/{id}"), user, pass)?;
     println!("Deleted share: {id}");
     Ok(())
 }
 
-fn api_share_start(addr: &str, user: Option<&str>, pass: Option<&str>, id: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn api_share_start(
+    addr: &str,
+    user: Option<&str>,
+    pass: Option<&str>,
+    id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     api_post(addr, &format!("/shares/{id}/start"), None, user, pass)?;
     println!("Starting share: {id}");
     Ok(())
 }
 
-fn api_share_stop(addr: &str, user: Option<&str>, pass: Option<&str>, id: &str) -> Result<(), Box<dyn std::error::Error>> {
+fn api_share_stop(
+    addr: &str,
+    user: Option<&str>,
+    pass: Option<&str>,
+    id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     api_post(addr, &format!("/shares/{id}/stop"), None, user, pass)?;
     println!("Stopped share: {id}");
     Ok(())

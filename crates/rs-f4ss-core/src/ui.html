@@ -329,9 +329,8 @@ createApp({setup(){
   const showChangePass=ref(false),oldPass=ref(''),newPass=ref(''),newPass2=ref(''),passError=ref('')
   let timer=null,nextId=0
 
-  // Restore credentials from localStorage (encoded auth header, not plaintext)
   const saved=localStorage.getItem('rs-f4ss-auth')
-  if(saved){try{const a=JSON.parse(saved);if(a.u&&a.h){loginUser.value=a.u;loginPass.value=a.h}}catch{}}
+  if(saved){try{const a=JSON.parse(saved);if(a.u&&a.p){loginUser.value=a.u;loginPass.value=a.p}}catch{}}
 
   function b64(s){return btoa(unescape(encodeURIComponent(s)))}
   function authHeader(){return'Basic '+b64(loginUser.value+':'+loginPass.value)}
@@ -341,7 +340,7 @@ createApp({setup(){
     busy.value=true;loginError.value=''
     try{
       const res=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:loginUser.value,password:loginPass.value})})
-      if(res.ok){loggedIn.value=true;localStorage.setItem('rs-f4ss-auth',JSON.stringify({u:loginUser.value,h:b64(loginUser.value+':'+loginPass.value)}));refresh();startPoll()}
+      if(res.ok){loggedIn.value=true;localStorage.setItem('rs-f4ss-auth',JSON.stringify({u:loginUser.value,p:loginPass.value}));refresh();startPoll()}
       else{const d=await res.json().catch(()=>({}));loginError.value=d.error||'登录失败'}
     }catch{loginError.value='无法连接服务器'}
     finally{busy.value=false}

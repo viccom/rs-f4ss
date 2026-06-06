@@ -573,7 +573,10 @@ mod tests {
     #[test]
     fn test_auth_valid() {
         let mut state = make_auth_state();
-        state.auth = Some(("admin".to_string(), crate::persistence::sha256_hex("secret")));
+        state.auth = Some((
+            "admin".to_string(),
+            crate::persistence::sha256_hex("secret"),
+        ));
         let mut headers = HeaderMap::new();
         let creds = STANDARD.encode("admin:secret");
         headers.insert("authorization", format!("Basic {creds}").parse().unwrap());
@@ -583,7 +586,10 @@ mod tests {
     #[test]
     fn test_auth_invalid() {
         let mut state = make_auth_state();
-        state.auth = Some(("admin".to_string(), crate::persistence::sha256_hex("secret")));
+        state.auth = Some((
+            "admin".to_string(),
+            crate::persistence::sha256_hex("secret"),
+        ));
         let mut headers = HeaderMap::new();
         let creds = STANDARD.encode("admin:wrong");
         headers.insert("authorization", format!("Basic {creds}").parse().unwrap());
@@ -593,7 +599,10 @@ mod tests {
     #[test]
     fn test_auth_missing_header() {
         let mut state = make_auth_state();
-        state.auth = Some(("admin".to_string(), crate::persistence::sha256_hex("secret")));
+        state.auth = Some((
+            "admin".to_string(),
+            crate::persistence::sha256_hex("secret"),
+        ));
         assert!(state.check_auth(&HeaderMap::new()).is_err());
     }
 }

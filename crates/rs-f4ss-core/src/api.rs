@@ -155,11 +155,15 @@ async fn auth_change_password(
         };
         let decoded = match STANDARD.decode(encoded) {
             Ok(d) => d,
-            Err(_) => return (StatusCode::UNAUTHORIZED, Json(error_json("Unauthorized"))).into_response(),
+            Err(_) => {
+                return (StatusCode::UNAUTHORIZED, Json(error_json("Unauthorized"))).into_response()
+            }
         };
         let credentials = match String::from_utf8(decoded) {
             Ok(s) => s,
-            Err(_) => return (StatusCode::UNAUTHORIZED, Json(error_json("Unauthorized"))).into_response(),
+            Err(_) => {
+                return (StatusCode::UNAUTHORIZED, Json(error_json("Unauthorized"))).into_response()
+            }
         };
         let Some((user, pass)) = credentials.split_once(':') else {
             return (StatusCode::UNAUTHORIZED, Json(error_json("Unauthorized"))).into_response();
@@ -172,7 +176,11 @@ async fn auth_change_password(
         // Verify old_password from body
         let old_hash = persistence::sha256_hex(&req.old_password);
         if old_hash != auth.password_hash {
-            return (StatusCode::UNAUTHORIZED, Json(error_json("Old password is incorrect"))).into_response();
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(error_json("Old password is incorrect")),
+            )
+                .into_response();
         }
 
         auth.password_hash = persistence::sha256_hex(&req.new_password);
@@ -183,7 +191,11 @@ async fn auth_change_password(
         Ok(()) => Json(serde_json::json!({"message": "Password changed"})).into_response(),
         Err(e) => {
             tracing::error!("Failed to persist password change: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(error_json("Failed to save password change"))).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(error_json("Failed to save password change")),
+            )
+                .into_response()
         }
     }
 }
@@ -559,7 +571,11 @@ async fn update_share(
         path: req.path.unwrap_or(existing.path),
         addr: req.addr.unwrap_or(existing.addr),
         user: req.user.filter(|s| !s.is_empty()).or(existing.user),
-        pass: req.pass.filter(|s| !s.is_empty()).map(|p| persistence::sha256_hex(&p)).or(existing.pass),
+        pass: req
+            .pass
+            .filter(|s| !s.is_empty())
+            .map(|p| persistence::sha256_hex(&p))
+            .or(existing.pass),
         read_only: req.read_only.unwrap_or(existing.read_only),
     };
 

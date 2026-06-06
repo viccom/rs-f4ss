@@ -12,7 +12,7 @@ use crate::manager::MountEntry;
 use crate::share_manager::ShareConfig;
 
 #[cfg(any(feature = "api", feature = "serve"))]
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 
 const CONFIG_FILE: &str = "config.json";
 
@@ -156,18 +156,20 @@ fn read_store(path: &Path) -> AppStore {
 fn write_store(store: &AppStore, path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         if let Err(e) = fs::create_dir_all(parent) {
-            return Err(format!("Cannot create config dir {}: {e}", parent.display()));
+            return Err(format!(
+                "Cannot create config dir {}: {e}",
+                parent.display()
+            ));
         }
     }
 
-    let json = serde_json::to_string_pretty(store)
-        .map_err(|e| format!("Cannot serialize config: {e}"))?;
+    let json =
+        serde_json::to_string_pretty(store).map_err(|e| format!("Cannot serialize config: {e}"))?;
 
     let tmp_path = path.with_extension("tmp");
     fs::write(&tmp_path, &json)
         .map_err(|e| format!("Cannot write config {}: {e}", tmp_path.display()))?;
-    fs::rename(&tmp_path, path)
-        .map_err(|e| format!("Cannot rename config: {e}"))?;
+    fs::rename(&tmp_path, path).map_err(|e| format!("Cannot rename config: {e}"))?;
 
     #[cfg(unix)]
     {
