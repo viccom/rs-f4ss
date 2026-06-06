@@ -355,7 +355,7 @@ createApp({setup(){
     busy.value=true
     try{
       const res=await fetch('/api/auth/password',{method:'POST',headers:{'Content-Type':'application/json','Authorization':authHeader()},body:JSON.stringify({old_password:oldPass.value,new_password:newPass.value})})
-      if(res.ok){toast('密码已修改','success');loginPass.value=newPass.value;localStorage.setItem('rs-f4ss-auth',JSON.stringify({u:loginUser.value,h:b64(loginUser.value+':'+loginPass.value)}));showChangePass.value=false;oldPass.value='';newPass.value='';newPass2.value=''}
+      if(res.ok){toast('密码已修改','success');loginPass.value=newPass.value;localStorage.setItem('rs-f4ss-auth',JSON.stringify({u:loginUser.value,p:loginPass.value}));showChangePass.value=false;oldPass.value='';newPass.value='';newPass2.value=''}
       else{const d=await res.json().catch(()=>({}));passError.value=d.error||'修改失败'}
     }catch{passError.value='网络错误'}
     finally{busy.value=false}
@@ -486,6 +486,7 @@ createApp({setup(){
     showShareForm.value=true
   }
   async function saveShare(){
+    if(!!shareForm.user!==!!shareForm.pass){toast('用户名和密码必须同时填写或同时留空','error');return}
     busy.value=true
     try{
       const body={id:shareForm.id,path:shareForm.path,addr:shareForm.addr,read_only:shareForm.read_only}

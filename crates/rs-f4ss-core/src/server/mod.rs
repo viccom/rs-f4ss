@@ -233,7 +233,14 @@ impl FileServerState {
         let auth_header = headers
             .get("authorization")
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Basic "));
+            .and_then(|v| {
+                let prefix = v.get(..5.min(v.len()))?.to_ascii_lowercase();
+                if prefix == "basic" {
+                    Some(&v[6..])
+                } else {
+                    None
+                }
+            });
 
         let Some(encoded) = auth_header else {
             return Err(StatusCode::UNAUTHORIZED);

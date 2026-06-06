@@ -204,7 +204,13 @@ pub fn load(path: &Path) -> Vec<MountEntry> {
 
 #[cfg(feature = "api")]
 pub fn load_auth(path: &Path) -> AuthConfig {
-    read_store(path).auth.unwrap_or_default()
+    match read_store(path).auth {
+        Some(auth) => auth,
+        None => {
+            tracing::warn!("No auth config found in {}, using default credentials (admin:admin). Please change the password.", path.display());
+            AuthConfig::default()
+        }
+    }
 }
 
 #[cfg(feature = "api")]

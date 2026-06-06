@@ -37,7 +37,14 @@ impl AppState {
         let auth_header = headers
             .get("authorization")
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Basic "));
+            .and_then(|v| {
+                let prefix = v.get(..5.min(v.len()))?.to_ascii_lowercase();
+                if prefix == "basic" {
+                    Some(&v[6..])
+                } else {
+                    None
+                }
+            });
 
         let Some(encoded) = auth_header else {
             return false;
@@ -71,7 +78,10 @@ async fn auth_middleware(
     next: Next,
 ) -> impl IntoResponse {
     let path = req.uri().path();
-    if matches!(path, "/api/health" | "/" | "/vue.js" | "/api/auth/login") {
+    if matches!(
+        path,
+        "/api/health" | "/api/version" | "/" | "/vue.js" | "/api/auth/login"
+    ) {
         return next.run(req).await;
     }
 
@@ -124,32 +134,24 @@ async fn auth_change_password(
     headers: axum::http::HeaderMap,
     Json(req): Json<ChangePasswordRequest>,
 ) -> impl IntoResponse {
-    if req.old_password == req.new_password {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(error_json("New password must be different")),
-        )
-            .into_response();
-    }
+    // Validate Basic Auth header first, then persist to disk
+    // before updating in-memory state to avoid divergence on failure.
+    let new_hash = persistence::sha256_hex(&req.new_password);
+    {
+        let auth = state.auth.lock().unwrap();
 
-    if req.new_password.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(error_json("Password cannot be empty")),
-        )
-            .into_response();
-    }
-
-    // Validate Basic Auth header and old_password under a single lock hold
-    // to eliminate TOCTOU race.
-    let auth_clone = {
-        let mut auth = state.auth.lock().unwrap();
-
-        // Verify Basic Auth from header
+        // Verify Basic Auth from header (case-insensitive per RFC 7617)
         let auth_header = headers
             .get("authorization")
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Basic "));
+            .and_then(|v| {
+                let prefix = v.get(..5.min(v.len()))?.to_ascii_lowercase();
+                if prefix == "basic" {
+                    Some(&v[6..])
+                } else {
+                    None
+                }
+            });
         let Some(encoded) = auth_header else {
             return (StatusCode::UNAUTHORIZED, Json(error_json("Unauthorized"))).into_response();
         };
@@ -183,21 +185,46 @@ async fn auth_change_password(
                 .into_response();
         }
 
-        auth.password_hash = persistence::sha256_hex(&req.new_password);
-        auth.clone()
-    };
+        // Business validation (after auth to avoid leaking state)
+        if req.new_password.is_empty() {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(error_json("Password cannot be empty")),
+            )
+                .into_response();
+        }
 
-    match persistence::save_auth(&auth_clone, &state.persist_path) {
-        Ok(()) => Json(serde_json::json!({"message": "Password changed"})).into_response(),
-        Err(e) => {
+        if req.old_password == req.new_password {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(error_json("New password must be different")),
+            )
+                .into_response();
+        }
+
+        // Persist first, then update memory — avoids memory/disk divergence on failure
+        let updated = AuthConfig {
+            username: auth.username.clone(),
+            password_hash: new_hash.clone(),
+        };
+        drop(auth);
+        if let Err(e) = persistence::save_auth(&updated, &state.persist_path) {
             tracing::error!("Failed to persist password change: {e}");
-            (
+            return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(error_json("Failed to save password change")),
             )
-                .into_response()
+                .into_response();
         }
     }
+
+    // Only update in-memory state after successful disk write
+    {
+        let mut auth = state.auth.lock().unwrap();
+        auth.password_hash = new_hash;
+    }
+
+    Json(serde_json::json!({"message": "Password changed"})).into_response()
 }
 
 #[cfg(feature = "serve")]
@@ -499,6 +526,18 @@ async fn create_share(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CreateShareRequest>,
 ) -> impl IntoResponse {
+    let has_user = req.user.as_ref().is_some_and(|s| !s.is_empty());
+    let has_pass = req.pass.as_ref().is_some_and(|s| !s.is_empty());
+    if has_user != has_pass {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(error_json(
+                "user and pass must both be provided or both be empty",
+            )),
+        )
+            .into_response();
+    }
+
     let config = ShareConfig {
         id: req.id,
         path: req.path,
@@ -566,16 +605,22 @@ async fn update_share(
         }
     };
 
+    let new_user = req.user.filter(|s| !s.is_empty()).or(existing.user);
+    let new_pass = if new_user.is_none() {
+        None
+    } else {
+        req.pass
+            .filter(|s| !s.is_empty())
+            .map(|p| persistence::sha256_hex(&p))
+            .or_else(|| existing.pass.clone())
+    };
+
     let updated = ShareConfig {
         id: id.clone(),
         path: req.path.unwrap_or(existing.path),
         addr: req.addr.unwrap_or(existing.addr),
-        user: req.user.filter(|s| !s.is_empty()).or(existing.user),
-        pass: req
-            .pass
-            .filter(|s| !s.is_empty())
-            .map(|p| persistence::sha256_hex(&p))
-            .or(existing.pass),
+        user: new_user,
+        pass: new_pass,
         read_only: req.read_only.unwrap_or(existing.read_only),
     };
 
@@ -722,7 +767,6 @@ mod tests {
         let app = test_app();
         let req = Request::builder()
             .uri("/api/version")
-            .header("authorization", auth_header())
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
