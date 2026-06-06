@@ -82,16 +82,35 @@ tr:hover td{background:#fafbfc}
 .toast-info{background:#dbeafe;color:#1e40af}
 @keyframes slideIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}
 .toggle{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2);cursor:pointer}
+.login-wrap{display:flex;align-items:center;justify-content:center;min-height:100vh}
+.login-card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:32px;width:340px;box-shadow:var(--sh)}
 </style>
 </head>
 <body>
 <div id="app" style="display:none">
+  <!-- Login Screen -->
+  <template v-if="!loggedIn">
+    <div class="login-wrap">
+      <div class="login-card">
+        <h2 style="margin-bottom:16px;text-align:center">rs-f4ss 登录</h2>
+        <div class="fg"><label>用户名</label><input v-model="loginUser" @keydown.enter="doLogin" placeholder="admin"></div>
+        <div class="fg"><label>密码</label><input type="password" v-model="loginPass" @keydown.enter="doLogin" placeholder="密码"></div>
+        <button class="btn btn-primary" style="width:100%;justify-content:center;margin-top:8px" @click="doLogin" :disabled="busy">{{ busy ? '登录中...' : '登录' }}</button>
+        <div v-if="loginError" style="color:var(--red);font-size:13px;margin-top:8px;text-align:center">{{ loginError }}</div>
+      </div>
+    </div>
+  </template>
+
+  <!-- Main App (after login) -->
+  <template v-if="loggedIn">
   <header>
     <div class="header-inner">
       <h1>rs-f4ss</h1>
       <span class="tag" v-if="version">v{{ version }}</span>
       <span style="flex:1"></span>
       <span class="health" :class="healthy ? 'health-ok' : 'health-down'" :title="healthy ? '服务正常' : '服务异常'"></span>
+      <button class="btn btn-sm" @click="showChangePass=true" style="margin-left:8px">修改密码</button>
+      <button class="btn btn-sm btn-danger" @click="doLogout" style="margin-left:4px">退出</button>
     </div>
   </header>
 
@@ -260,10 +279,31 @@ tr:hover td{background:#fafbfc}
     </div>
   </div>
 
+  <!-- Change Password Modal -->
+  <div class="overlay" v-if="showChangePass" @click.self="showChangePass=false">
+    <div class="modal modal-sm">
+      <div class="modal-head">
+        <h2>修改密码</h2>
+        <button class="modal-close" @click="showChangePass=false">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="fg"><label>旧密码</label><input type="password" v-model="oldPass"></div>
+        <div class="fg"><label>新密码</label><input type="password" v-model="newPass"></div>
+        <div class="fg"><label>确认新密码</label><input type="password" v-model="newPass2"></div>
+        <div v-if="passError" style="color:var(--red);font-size:13px;margin-top:4px">{{ passError }}</div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" @click="showChangePass=false">取消</button>
+        <button class="btn btn-primary" @click="doChangePass" :disabled="busy||!oldPass||!newPass||!newPass2">{{ busy ? '处理中...' : '确认修改' }}</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Toasts -->
   <div class="toasts">
     <div v-for="t in toasts" :key="t.id" class="toast" :class="'toast-'+t.type">{{ t.msg }}</div>
   </div>
+  </template>
 </div>
 
 <div id="fallback" style="display:none">
@@ -285,7 +325,42 @@ createApp({setup(){
   const confirmMsg=ref(''),confirmFn=ref(null),toasts=ref([])
   const mountForm=reactive({id:'',url:'',mountpoint:'',read_only:false,username:'',password:'',cache_ttl_secs:5,cache_size:256})
   const shareForm=reactive({id:'',path:'',addr:'0.0.0.0:8081',read_only:false,user:'',pass:''})
+  const loggedIn=ref(false),loginUser=ref(''),loginPass=ref(''),loginError=ref('')
+  const showChangePass=ref(false),oldPass=ref(''),newPass=ref(''),newPass2=ref(''),passError=ref('')
   let timer=null,nextId=0
+
+  // Restore credentials from localStorage
+  const saved=localStorage.getItem('rs-f4ss-auth')
+  if(saved){try{const a=JSON.parse(saved);if(a.u&&a.p){loginUser.value=a.u;loginPass.value=a.p}}catch{}}
+
+  function b64(s){return btoa(unescape(encodeURIComponent(s)))}
+  function authHeader(){return'Basic '+b64(loginUser.value+':'+loginPass.value)}
+
+  async function doLogin(){
+    if(!loginUser.value||!loginPass.value)return
+    busy.value=true;loginError.value=''
+    try{
+      const res=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:loginUser.value,password:loginPass.value})})
+      if(res.ok){loggedIn.value=true;localStorage.setItem('rs-f4ss-auth',JSON.stringify({u:loginUser.value,p:loginPass.value}));refresh();startPoll()}
+      else{const d=await res.json().catch(()=>({}));loginError.value=d.error||'登录失败'}
+    }catch{loginError.value='无法连接服务器'}
+    finally{busy.value=false}
+  }
+
+  function doLogout(){loggedIn.value=false;localStorage.removeItem('rs-f4ss-auth');stopPoll()}
+
+  async function doChangePass(){
+    passError.value=''
+    if(newPass.value!==newPass2.value){passError.value='两次输入的新密码不一致';return}
+    if(newPass.value.length<1){passError.value='密码不能为空';return}
+    busy.value=true
+    try{
+      const res=await fetch('/api/auth/password',{method:'POST',headers:{'Content-Type':'application/json','Authorization':authHeader()},body:JSON.stringify({old_password:oldPass.value,new_password:newPass.value})})
+      if(res.ok){toast('密码已修改，请重新登录','success');loginPass.value=newPass.value;localStorage.setItem('rs-f4ss-auth',JSON.stringify({u:loginUser.value,p:loginPass.value}));showChangePass.value=false;oldPass.value='';newPass.value='';newPass2.value=''}
+      else{const d=await res.json().catch(()=>({}));passError.value=d.error||'修改失败'}
+    }catch{passError.value='网络错误'}
+    finally{busy.value=false}
+  }
 
   const mountStats=computed(()=>{
     let r=0,s=0,e=0
@@ -308,9 +383,10 @@ createApp({setup(){
   })
 
   async function api(method,path,body){
-    const o={method,headers:{}}
+    const o={method,headers:{'Authorization':authHeader()}}
     if(body){o.headers['Content-Type']='application/json';o.body=JSON.stringify(body)}
     const res=await fetch('/api'+path,o)
+    if(res.status===401){doLogout();return{ok:false,status:401,data:{error:'会话已过期，请重新登录'}}}
     const t=await res.text()
     let data=null
     if(t){try{data=JSON.parse(t)}catch{data={error:t}}}
@@ -451,10 +527,19 @@ createApp({setup(){
   function stopPoll(){if(timer){clearInterval(timer);timer=null}}
   function onKey(e){if(e.key==='Escape'){if(showConfirm.value)showConfirm.value=false;else if(showShareForm.value)showShareForm.value=false;else if(showMountForm.value)showMountForm.value=false}}
   watch(autoRefresh,v=>{v?startPoll():stopPoll()})
-  onMounted(()=>{document.addEventListener('keydown',onKey);refresh();startPoll()})
+  onMounted(async()=>{
+    document.addEventListener('keydown',onKey)
+    if(loginUser.value&&loginPass.value){
+      const res=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:loginUser.value,password:loginPass.value})})
+      if(res.ok){loggedIn.value=true;refresh();startPoll();return}
+    }
+    localStorage.removeItem('rs-f4ss-auth')
+  })
   onUnmounted(()=>{document.removeEventListener('keydown',onKey);stopPoll()})
 
   return{tab,mounts,shares,version,healthy,autoRefresh,showMountForm,showShareForm,showConfirm,editingMount,editingShare,busy,confirmMsg,toasts,mountForm,shareForm,mountStats,shareStats,
+    loggedIn,loginUser,loginPass,loginError,showChangePass,oldPass,newPass,newPass2,passError,
+    doLogin,doLogout,doChangePass,
     badgeCls,stateText,errMsg,isActive,isIdle,refresh,
     openCreateMount,openEditMount,saveMount,doStartMount,askStopMount,askDeleteMount,
     openCreateShare,openEditShare,saveShare,doStartShare,askStopShare,askDeleteShare,

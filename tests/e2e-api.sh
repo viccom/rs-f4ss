@@ -12,11 +12,13 @@
 # Requires: dufs, fusermount, /dev/fuse, release binary built, jq
 set -euo pipefail
 
-DUFS_BIN="/usr/local/bin/dufs"
+DUFS_BIN="${DUFS_BIN:-/usr/local/bin/dufs}"
 DUFS_MOUNT_BIN="./target/release/rs-f4ss"
 DUFS_PORT=15433
 API_PORT=18080
 API_BASE="http://127.0.0.1:${API_PORT}"
+API_USER="admin"
+API_PASS="admin"
 
 DUFS_DATA=""
 MOUNTPOINT=""
@@ -59,10 +61,23 @@ http_body() {
 api() {
     local method="$1"; shift
     local path="$1"; shift
-    http_body -X "$method" "${API_BASE}${path}" "$@"
+    http_body -X "$method" -u "$API_USER:$API_PASS" "${API_BASE}${path}" "$@"
 }
 
 api_code() {
+    local method="$1"; shift
+    local path="$1"; shift
+    http_code -X "$method" -u "$API_USER:$API_PASS" "${API_BASE}${path}" "$@"
+}
+
+# Unauthenticated API call (for testing auth rejection)
+api_noauth() {
+    local method="$1"; shift
+    local path="$1"; shift
+    http_body -X "$method" "${API_BASE}${path}" "$@"
+}
+
+api_noauth_code() {
     local method="$1"; shift
     local path="$1"; shift
     http_code -X "$method" "${API_BASE}${path}" "$@"
@@ -156,6 +171,163 @@ check_deps() {
     if ! $DUFS_MOUNT_BIN --help 2>&1 | grep -q "serve"; then
         echo -e "${RED}rs-f4ss not built with 'api' feature${NC}"
         exit 1
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════
+# Phase 0 — Authentication
+# ═══════════════════════════════════════════════════════════════════════
+
+phase0_auth() {
+    echo -e "\n${CYAN}══ Phase 0 — Authentication ══${NC}"
+
+    # Health accessible without auth (whitelisted)
+    run_test "GET /api/health — no auth required"
+    local code body
+    code=$(api_noauth_code GET /api/health)
+    if [ "$code" = "200" ]; then
+        pass "Health accessible without credentials"
+    else
+        fail "Health without auth: expected 200, got $code"
+    fi
+
+    # Login with correct default credentials (admin/admin)
+    run_test "POST /api/auth/login — correct credentials"
+    body=$(api_noauth POST /api/auth/login -H 'Content-Type: application/json' \
+        -d '{"username":"admin","password":"admin"}')
+    code=$(api_noauth_code POST /api/auth/login -H 'Content-Type: application/json' \
+        -d '{"username":"admin","password":"admin"}')
+    if [ "$code" = "200" ] && echo "$body" | jq -e '.username == "admin"' >/dev/null 2>&1; then
+        pass "Login with admin/admin returns 200"
+    else
+        fail "Login admin/admin: HTTP=$code body=$body"
+    fi
+
+    # Login with wrong password
+    run_test "POST /api/auth/login — wrong password"
+    code=$(api_noauth_code POST /api/auth/login -H 'Content-Type: application/json' \
+        -d '{"username":"admin","password":"wrong"}')
+    if [ "$code" = "401" ]; then
+        pass "Wrong password returns 401"
+    else
+        fail "Wrong password: expected 401, got $code"
+    fi
+
+    # Login with wrong username
+    run_test "POST /api/auth/login — wrong username"
+    code=$(api_noauth_code POST /api/auth/login -H 'Content-Type: application/json' \
+        -d '{"username":"root","password":"admin"}')
+    if [ "$code" = "401" ]; then
+        pass "Wrong username returns 401"
+    else
+        fail "Wrong username: expected 401, got $code"
+    fi
+
+    # API endpoints without auth return 401
+    run_test "GET /api/mounts — no auth returns 401"
+    code=$(api_noauth_code GET /api/mounts)
+    if [ "$code" = "401" ]; then
+        pass "Mounts list without auth returns 401"
+    else
+        fail "Mounts without auth: expected 401, got $code"
+    fi
+
+    run_test "GET /api/version — no auth returns 401"
+    code=$(api_noauth_code GET /api/version)
+    if [ "$code" = "401" ]; then
+        pass "Version without auth returns 401"
+    else
+        fail "Version without auth: expected 401, got $code"
+    fi
+
+    # API endpoints with correct auth succeed
+    run_test "GET /api/mounts — with auth returns 200"
+    code=$(api_code GET /api/mounts)
+    if [ "$code" = "200" ]; then
+        pass "Mounts list with auth returns 200"
+    else
+        fail "Mounts with auth: expected 200, got $code"
+    fi
+
+    run_test "GET /api/version — with auth returns 200"
+    code=$(api_code GET /api/version)
+    body=$(api GET /api/version)
+    if [ "$code" = "200" ] && echo "$body" | jq -e '.version' >/dev/null; then
+        pass "Version with auth returns 200"
+    else
+        fail "Version with auth: HTTP=$code body=$body"
+    fi
+
+    # Change password
+    run_test "POST /api/auth/password — change password"
+    body=$(api POST /api/auth/password -H 'Content-Type: application/json' \
+        -d '{"old_password":"admin","new_password":"newpass123"}')
+    if echo "$body" | jq -e '.message == "Password changed"' >/dev/null 2>&1; then
+        pass "Password changed successfully"
+    else
+        fail "Change password: $body"
+    fi
+
+    # Old credentials no longer work
+    run_test "GET /api/mounts — old credentials rejected"
+    local old_code
+    old_code=$(http_code -X GET -u "admin:admin" "${API_BASE}/api/mounts")
+    if [ "$old_code" = "401" ]; then
+        pass "Old credentials rejected after password change"
+    else
+        fail "Old credentials: expected 401, got $old_code"
+    fi
+
+    # New credentials work
+    run_test "GET /api/mounts — new credentials accepted"
+    local new_code
+    new_code=$(http_code -X GET -u "admin:newpass123" "${API_BASE}/api/mounts")
+    if [ "$new_code" = "200" ]; then
+        pass "New credentials work"
+    else
+        fail "New credentials: expected 200, got $new_code"
+    fi
+
+    # Login with new password
+    run_test "POST /api/auth/login — new password works"
+    code=$(api_noauth_code POST /api/auth/login -H 'Content-Type: application/json' \
+        -d '{"username":"admin","password":"newpass123"}')
+    if [ "$code" = "200" ]; then
+        pass "Login with new password returns 200"
+    else
+        fail "Login new password: expected 200, got $code"
+    fi
+
+    # Change password back to admin for remaining tests
+    run_test "POST /api/auth/password — restore default password"
+    local restore_code
+    restore_code=$(http_code -X POST -u "admin:newpass123" "${API_BASE}/api/auth/password" \
+        -H 'Content-Type: application/json' \
+        -d '{"old_password":"newpass123","new_password":"admin"}')
+    if [ "$restore_code" = "200" ]; then
+        pass "Password restored to admin for remaining tests"
+    else
+        fail "Restore password: expected 200, got $restore_code"
+    fi
+
+    # Change password — wrong old password
+    run_test "POST /api/auth/password — wrong old password"
+    code=$(api_code POST /api/auth/password -H 'Content-Type: application/json' \
+        -d '{"old_password":"wrong","new_password":"another"}')
+    if [ "$code" = "401" ]; then
+        pass "Change password with wrong old password returns 401"
+    else
+        fail "Wrong old password: expected 401, got $code"
+    fi
+
+    # Change password — empty new password
+    run_test "POST /api/auth/password — empty new password"
+    code=$(api_code POST /api/auth/password -H 'Content-Type: application/json' \
+        -d '{"old_password":"admin","new_password":""}')
+    if [ "$code" = "400" ]; then
+        pass "Empty new password returns 400"
+    else
+        fail "Empty new password: expected 400, got $code"
     fi
 }
 
@@ -738,6 +910,7 @@ main() {
     start_dufs
     start_api
 
+    phase0_auth
     phase1_health_version
     phase2_crud
     phase3_lifecycle

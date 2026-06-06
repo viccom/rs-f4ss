@@ -16,10 +16,10 @@ http   = ["dep:reqwest", "dep:base64", "dep:chrono"]
 s3     = ["dep:reqwest", "dep:quick-xml", "dep:chrono"]
 
 # REST API management
-api = ["dep:axum", "dep:tower-http", "dep:serde_json", "dep:dirs"]
+api = ["dep:axum", "dep:tower-http", "dep:serde_json", "dep:dirs", "dep:sha2"]
 
 # File sharing server (HTTP + WebDAV)
-serve = ["dep:axum", "dep:tower-http", "dep:chrono", "dep:base64", "dep:serde_json", "dep:tokio-util"]
+serve = ["dep:axum", "dep:tower-http", "dep:chrono", "dep:base64", "dep:serde_json", "dep:tokio-util", "dep:sha2"]
 
 [dependencies]
 # Shared core deps — always compiled
@@ -48,6 +48,9 @@ axum = { workspace = true, optional = true }
 tower-http = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 dirs = { workspace = true, optional = true }
+
+# API + Serve shared
+sha2 = { workspace = true, optional = true }
 
 # Serve feature
 tokio-util = { workspace = true, optional = true }

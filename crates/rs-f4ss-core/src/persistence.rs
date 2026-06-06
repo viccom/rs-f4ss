@@ -10,7 +10,37 @@ use crate::manager::MountEntry;
 #[cfg(feature = "serve")]
 use crate::share_manager::ShareConfig;
 
+#[cfg(any(feature = "api", feature = "serve"))]
+use sha2::{Sha256, Digest};
+
 const CONFIG_FILE: &str = "config.json";
+
+// ---------------------------------------------------------------------------
+// Auth config (stored in config.json)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthConfig {
+    pub username: String,
+    pub password_hash: String,
+}
+
+#[cfg(any(feature = "api", feature = "serve"))]
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            username: "admin".to_string(),
+            password_hash: sha256_hex("admin"),
+        }
+    }
+}
+
+#[cfg(any(feature = "api", feature = "serve"))]
+pub fn sha256_hex(input: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
 
 // ---------------------------------------------------------------------------
 // Public paths
@@ -30,6 +60,8 @@ pub fn default_config_path() -> Option<PathBuf> {
 
 #[derive(Serialize, Deserialize, Default)]
 struct AppStore {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auth: Option<AuthConfig>,
     #[serde(default)]
     mounts: Vec<MountEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -104,6 +136,7 @@ fn read_store(path: &Path) -> AppStore {
     // Backward compat: old format was a plain array of MountEntry
     if let Ok(mounts) = serde_json::from_str::<Vec<MountEntry>>(&data) {
         return AppStore {
+            auth: None,
             mounts,
             shares: Vec::new(),
         };
@@ -160,6 +193,22 @@ pub fn save(entries: &DashMap<String, MountEntry>, path: &Path) {
 
 pub fn load(path: &Path) -> Vec<MountEntry> {
     read_store(path).mounts
+}
+
+// ---------------------------------------------------------------------------
+// Auth persistence
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "api")]
+pub fn load_auth(path: &Path) -> AuthConfig {
+    read_store(path).auth.unwrap_or_default()
+}
+
+#[cfg(feature = "api")]
+pub fn save_auth(auth: &AuthConfig, path: &Path) {
+    let mut store = read_store(path);
+    store.auth = Some(auth.clone());
+    write_store(&store, path);
 }
 
 // ---------------------------------------------------------------------------

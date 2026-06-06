@@ -226,7 +226,7 @@ impl FileServerState {
 
     /// Check Basic Auth.
     fn check_auth(&self, headers: &HeaderMap) -> Result<(), StatusCode> {
-        let Some((expected_user, expected_pass)) = &self.auth else {
+        let Some((expected_user, expected_hash)) = &self.auth else {
             return Ok(());
         };
 
@@ -245,7 +245,15 @@ impl FileServerState {
         let credentials = String::from_utf8(decoded).map_err(|_| StatusCode::UNAUTHORIZED)?;
 
         match credentials.split_once(':') {
-            Some((user, pass)) if user == expected_user && pass == expected_pass => Ok(()),
+            Some((user, pass)) => {
+                if user == expected_user {
+                    let incoming_hash = crate::persistence::sha256_hex(pass);
+                    if incoming_hash == *expected_hash {
+                        return Ok(());
+                    }
+                }
+                Err(StatusCode::UNAUTHORIZED)
+            }
             _ => Err(StatusCode::UNAUTHORIZED),
         }
     }
@@ -565,7 +573,7 @@ mod tests {
     #[test]
     fn test_auth_valid() {
         let mut state = make_auth_state();
-        state.auth = Some(("admin".to_string(), "secret".to_string()));
+        state.auth = Some(("admin".to_string(), crate::persistence::sha256_hex("secret")));
         let mut headers = HeaderMap::new();
         let creds = STANDARD.encode("admin:secret");
         headers.insert("authorization", format!("Basic {creds}").parse().unwrap());
@@ -575,7 +583,7 @@ mod tests {
     #[test]
     fn test_auth_invalid() {
         let mut state = make_auth_state();
-        state.auth = Some(("admin".to_string(), "secret".to_string()));
+        state.auth = Some(("admin".to_string(), crate::persistence::sha256_hex("secret")));
         let mut headers = HeaderMap::new();
         let creds = STANDARD.encode("admin:wrong");
         headers.insert("authorization", format!("Basic {creds}").parse().unwrap());
@@ -585,7 +593,7 @@ mod tests {
     #[test]
     fn test_auth_missing_header() {
         let mut state = make_auth_state();
-        state.auth = Some(("admin".to_string(), "secret".to_string()));
+        state.auth = Some(("admin".to_string(), crate::persistence::sha256_hex("secret")));
         assert!(state.check_auth(&HeaderMap::new()).is_err());
     }
 }

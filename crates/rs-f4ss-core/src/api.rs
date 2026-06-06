@@ -2,16 +2,20 @@
 //!
 //! Requires `feature = "api"`.
 
-use std::sync::Arc;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Request, State};
 use axum::http::StatusCode;
+use axum::middleware::{self, Next};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Deserialize;
 
 use crate::manager::{self, MountEntry, MountManager};
+use crate::persistence::{self, AuthConfig};
 
 #[cfg(feature = "serve")]
 use crate::share_manager::{ShareConfig, ShareManager};
@@ -24,6 +28,144 @@ pub struct AppState {
     pub mounts: MountManager,
     #[cfg(feature = "serve")]
     pub shares: ShareManager,
+    pub auth: Mutex<AuthConfig>,
+    pub persist_path: PathBuf,
+}
+
+impl AppState {
+    pub fn check_basic_auth(&self, headers: &axum::http::HeaderMap) -> bool {
+        let auth_header = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Basic "));
+
+        let Some(encoded) = auth_header else {
+            return false;
+        };
+
+        let decoded = match STANDARD.decode(encoded) {
+            Ok(d) => d,
+            Err(_) => return false,
+        };
+        let credentials = match String::from_utf8(decoded) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let Some((user, pass)) = credentials.split_once(':') else {
+            return false;
+        };
+
+        let auth = self.auth.lock().unwrap();
+        let incoming_hash = persistence::sha256_hex(pass);
+        user == auth.username && incoming_hash == auth.password_hash
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Auth middleware
+// ---------------------------------------------------------------------------
+
+async fn auth_middleware(
+    State(state): State<Arc<AppState>>,
+    req: Request,
+    next: Next,
+) -> impl IntoResponse {
+    let path = req.uri().path();
+    if matches!(path, "/api/health" | "/" | "/vue.js" | "/api/auth/login") {
+        return next.run(req).await;
+    }
+
+    if state.check_basic_auth(req.headers()) {
+        return next.run(req).await;
+    }
+
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(error_json("Unauthorized: invalid credentials")),
+    )
+        .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Auth endpoints
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct LoginRequest {
+    username: String,
+    password: String,
+}
+
+async fn auth_login(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<LoginRequest>,
+) -> impl IntoResponse {
+    let hash = persistence::sha256_hex(&req.password);
+    let auth = state.auth.lock().unwrap();
+    if req.username == auth.username && hash == auth.password_hash {
+        Json(serde_json::json!({"username": auth.username})).into_response()
+    } else {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(error_json("Invalid username or password")),
+        )
+            .into_response()
+    }
+}
+
+#[derive(Deserialize)]
+struct ChangePasswordRequest {
+    old_password: String,
+    new_password: String,
+}
+
+async fn auth_change_password(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<ChangePasswordRequest>,
+) -> impl IntoResponse {
+    if !state.check_basic_auth(&headers) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(error_json("Unauthorized")),
+        )
+            .into_response();
+    }
+
+    if req.old_password == req.new_password {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(error_json("New password must be different")),
+        )
+            .into_response();
+    }
+
+    if req.new_password.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(error_json("Password cannot be empty")),
+        )
+            .into_response();
+    }
+
+    let old_hash = persistence::sha256_hex(&req.old_password);
+    let new_hash = persistence::sha256_hex(&req.new_password);
+
+    let mut auth = state.auth.lock().unwrap();
+    if old_hash != auth.password_hash {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(error_json("Old password is incorrect")),
+        )
+            .into_response();
+    }
+
+    auth.password_hash = new_hash;
+    let auth_clone = auth.clone();
+    drop(auth);
+
+    persistence::save_auth(&auth_clone, &state.persist_path);
+    Json(serde_json::json!({"message": "Password changed"})).into_response()
 }
 
 #[cfg(feature = "serve")]
@@ -33,6 +175,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/vue.js", get(vue_js))
         .route("/api/health", get(health))
         .route("/api/version", get(version))
+        .route("/api/auth/login", post(auth_login))
+        .route("/api/auth/password", post(auth_change_password))
         .route("/api/mounts", get(list_mounts).post(create_mount))
         .route(
             "/api/mounts/{id}",
@@ -47,7 +191,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         .route("/api/shares/{id}/start", post(start_share))
         .route("/api/shares/{id}/stop", post(stop_share))
-        .with_state(state)
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(state, auth_middleware))
 }
 
 #[cfg(not(feature = "serve"))]
@@ -57,6 +202,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/vue.js", get(vue_js))
         .route("/api/health", get(health))
         .route("/api/version", get(version))
+        .route("/api/auth/login", post(auth_login))
+        .route("/api/auth/password", post(auth_change_password))
         .route("/api/mounts", get(list_mounts).post(create_mount))
         .route(
             "/api/mounts/{id}",
@@ -64,7 +211,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         )
         .route("/api/mounts/{id}/start", post(start_mount))
         .route("/api/mounts/{id}/stop", post(stop_mount))
-        .with_state(state)
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(state, auth_middleware))
 }
 
 // ---------------------------------------------------------------------------
@@ -324,7 +472,7 @@ async fn create_share(
         path: req.path,
         addr: req.addr,
         user: req.user,
-        pass: req.pass,
+        pass: req.pass.map(|p| persistence::sha256_hex(&p)),
         read_only: req.read_only,
     };
     match state.shares.add(config) {
@@ -391,7 +539,7 @@ async fn update_share(
         path: req.path.unwrap_or(existing.path),
         addr: req.addr.unwrap_or(existing.addr),
         user: req.user.filter(|s| !s.is_empty()).or(existing.user),
-        pass: req.pass.filter(|s| !s.is_empty()).or(existing.pass),
+        pass: req.pass.filter(|s| !s.is_empty()).map(|p| persistence::sha256_hex(&p)).or(existing.pass),
         read_only: req.read_only.unwrap_or(existing.read_only),
     };
 
@@ -503,6 +651,8 @@ mod tests {
             mounts: MountManager::new(),
             #[cfg(feature = "serve")]
             shares: ShareManager::new(),
+            auth: Mutex::new(AuthConfig::default()),
+            persist_path: PathBuf::from("/tmp/nonexistent-test-config"),
         });
         create_router(state)
     }
@@ -514,6 +664,10 @@ mod tests {
             "mountpoint": format!("/mnt/{id}"),
         })
         .to_string()
+    }
+
+    fn auth_header() -> String {
+        basic_auth_header("admin", "admin")
     }
 
     #[tokio::test]
@@ -532,6 +686,7 @@ mod tests {
         let app = test_app();
         let req = Request::builder()
             .uri("/api/version")
+            .header("authorization", auth_header())
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -542,19 +697,19 @@ mod tests {
     async fn test_create_and_list_mounts() {
         let app = test_app();
 
-        // Create
         let req = Request::builder()
             .method("POST")
             .uri("/api/mounts")
             .header("content-type", "application/json")
+            .header("authorization", auth_header())
             .body(Body::from(test_create_body("m1")))
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::CREATED);
 
-        // List
         let req = Request::builder()
             .uri("/api/mounts")
+            .header("authorization", auth_header())
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -574,6 +729,7 @@ mod tests {
             .method("POST")
             .uri("/api/mounts")
             .header("content-type", "application/json")
+            .header("authorization", auth_header())
             .body(Body::from(test_create_body("dup")))
             .unwrap();
         let _ = app.clone().oneshot(req).await.unwrap();
@@ -582,6 +738,7 @@ mod tests {
             .method("POST")
             .uri("/api/mounts")
             .header("content-type", "application/json")
+            .header("authorization", auth_header())
             .body(Body::from(test_create_body("dup")))
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -593,6 +750,7 @@ mod tests {
         let app = test_app();
         let req = Request::builder()
             .uri("/api/mounts/nonexistent")
+            .header("authorization", auth_header())
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -607,6 +765,7 @@ mod tests {
             .method("POST")
             .uri("/api/mounts")
             .header("content-type", "application/json")
+            .header("authorization", auth_header())
             .body(Body::from(test_create_body("del")))
             .unwrap();
         let _ = app.clone().oneshot(req).await.unwrap();
@@ -614,9 +773,85 @@ mod tests {
         let req = Request::builder()
             .method("DELETE")
             .uri("/api/mounts/del")
+            .header("authorization", auth_header())
             .body(Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    }
+
+    fn test_app_with_creds(user: &str, pass: &str) -> Router {
+        let auth = AuthConfig {
+            username: user.to_string(),
+            password_hash: crate::persistence::sha256_hex(pass),
+        };
+        let state = Arc::new(AppState {
+            mounts: MountManager::new(),
+            #[cfg(feature = "serve")]
+            shares: ShareManager::new(),
+            auth: Mutex::new(auth),
+            persist_path: PathBuf::from("/tmp/nonexistent-test-config"),
+        });
+        create_router(state)
+    }
+
+    fn basic_auth_header(user: &str, pass: &str) -> String {
+        format!("Basic {}", STANDARD.encode(format!("{user}:{pass}")))
+    }
+
+    #[tokio::test]
+    async fn test_auth_valid_basic() {
+        let app = test_app_with_creds("admin", "admin");
+        let req = Request::builder()
+            .uri("/api/mounts")
+            .header("authorization", basic_auth_header("admin", "admin"))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_auth_wrong_password() {
+        let app = test_app_with_creds("admin", "admin");
+        let req = Request::builder()
+            .uri("/api/mounts")
+            .header("authorization", basic_auth_header("admin", "wrong"))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_auth_missing_header() {
+        let app = test_app_with_creds("admin", "admin");
+        let req = Request::builder()
+            .uri("/api/mounts")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_auth_health_and_login_skipped() {
+        let app = test_app_with_creds("admin", "admin");
+        let req = Request::builder()
+            .uri("/api/health")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let app2 = test_app_with_creds("admin", "admin");
+        let req2 = Request::builder()
+            .method("POST")
+            .uri("/api/auth/login")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"username":"admin","password":"admin"}"#))
+            .unwrap();
+        let resp2 = app2.oneshot(req2).await.unwrap();
+        assert_eq!(resp2.status(), StatusCode::OK);
     }
 }
