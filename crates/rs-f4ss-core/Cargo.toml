@@ -1,0 +1,65 @@
+[package]
+name = "rs-f4ss-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core library for mounting remote file servers via FUSE"
+
+[features]
+default = ["webdav"]
+
+# Protocol backends
+webdav = ["dep:reqwest", "dep:quick-xml", "dep:base64", "dep:chrono"]
+http   = ["dep:reqwest", "dep:base64", "dep:chrono"]
+s3     = ["dep:reqwest", "dep:quick-xml", "dep:chrono"]
+
+# REST API management
+api = ["dep:axum", "dep:tower-http", "dep:serde_json", "dep:dirs"]
+
+# File sharing server (HTTP + WebDAV)
+serve = ["dep:axum", "dep:tower-http", "dep:chrono", "dep:base64", "dep:serde_json", "dep:tokio-util"]
+
+[dependencies]
+# Shared core deps — always compiled
+tokio.workspace = true
+thiserror.workspace = true
+dashmap.workspace = true
+moka.workspace = true
+tracing.workspace = true
+url.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+bytes.workspace = true
+futures-util.workspace = true
+
+# WebDAV + S3 shared
+reqwest = { workspace = true, optional = true }
+quick-xml = { workspace = true, optional = true }
+chrono = { workspace = true, optional = true }
+percent-encoding = "2"
+
+# WebDAV only
+base64 = { workspace = true, optional = true }
+
+# API feature
+axum = { workspace = true, optional = true }
+tower-http = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+dirs = { workspace = true, optional = true }
+
+# Serve feature
+tokio-util = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+fuser.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+winfsp = "0.12"
+winfsp-sys = "0.12"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
+tower = "0.5"
+tempfile = "3"

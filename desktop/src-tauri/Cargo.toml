@@ -1,0 +1,18 @@
+[package]
+name = "rs-f4ss-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Desktop GUI for rs-f4ss"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+rs-f4ss-core = { path = "../../crates/rs-f4ss-core", features = ["webdav", "http", "api"] }
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-single-instance = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }

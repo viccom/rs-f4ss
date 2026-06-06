@@ -1,0 +1,33 @@
+[package]
+name = "rs-f4ss-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CLI for mounting remote file servers via FUSE"
+
+[[bin]]
+name = "rs-f4ss"
+path = "src/main.rs"
+
+[features]
+default = ["webdav", "api"]
+webdav = ["rs-f4ss-core/webdav"]
+http = ["rs-f4ss-core/http"]
+api = ["rs-f4ss-core/api", "dep:axum"]
+serve = ["rs-f4ss-core/serve", "dep:axum"]
+
+[dependencies]
+rs-f4ss-core = { path = "../rs-f4ss-core" }
+tokio.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+axum = { workspace = true, optional = true }
+dirs = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "json", "rustls-tls"], default-features = false }
+serde_json.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"

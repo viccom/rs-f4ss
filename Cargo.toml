@@ -1,0 +1,43 @@
+[workspace]
+members = [
+    "crates/rs-f4ss-core",
+    "crates/rs-f4ss-cli",
+    "desktop/src-tauri",
+]
+resolver = "2"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+repository = "https://github.com/viccom/rs-f4ss"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["rustls-tls", "stream"], default-features = false }
+quick-xml = "0.36"
+thiserror = "1"
+clap = { version = "4", features = ["derive"] }
+fuser = { git = "https://github.com/cberner/fuser", branch = "master" }
+dashmap = "6"
+moka = { version = "0.12", features = ["future"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+async-trait = "0.1"
+chrono = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+bytes = "1"
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+dirs = "6"
+futures-util = "0.3"
+tokio-util = { version = "0.7", features = ["io"] }

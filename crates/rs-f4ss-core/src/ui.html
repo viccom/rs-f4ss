@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>rs-f4ss</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📁</text></svg>">
+<style>
+:root{--green:#10b981;--green-bg:#d1fae5;--yellow:#f59e0b;--yellow-bg:#fef3c7;--gray:#9ca3af;--gray-bg:#f3f4f6;--red:#ef4444;--red-bg:#fee2e2;--blue:#4f46e5;--blue-h:#4338ca;--bg:#f8fafc;--card:#fff;--bd:#e2e8f0;--tx:#1e293b;--tx2:#64748b;--tx3:#94a3b8;--sh:0 1px 3px rgba(0,0,0,.08);--rad:8px;--mw:960px}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',sans-serif;background:var(--bg);color:var(--tx);line-height:1.5}
+header{background:var(--card);border-bottom:1px solid var(--bd)}
+.header-inner{max-width:var(--mw);margin:0 auto;padding:12px 24px;display:flex;align-items:center;gap:12px}
+header h1{font-size:18px;font-weight:700;letter-spacing:-.5px}
+.tag{font-size:11px;background:var(--gray-bg);color:var(--tx2);padding:2px 8px;border-radius:12px;font-weight:500}
+.health{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.health-ok{background:var(--green);box-shadow:0 0 6px var(--green)}
+.health-down{background:var(--red);box-shadow:0 0 6px var(--red)}
+.container{max-width:var(--mw);margin:0 auto;padding:20px 24px}
+.tabs{display:flex;gap:0;border-bottom:2px solid var(--bd);margin-bottom:16px}
+.tab{padding:8px 20px;cursor:pointer;font-size:14px;font-weight:500;color:var(--tx2);border-bottom:2px solid transparent;margin-bottom:-2px;transition:all .15s}
+.tab:hover{color:var(--tx)}
+.tab.active{color:var(--blue);border-bottom-color:var(--blue)}
+.toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:12px;flex-wrap:wrap}
+.toolbar-right{display:flex;align-items:center;gap:12px}
+.btn{display:inline-flex;align-items:center;gap:4px;padding:6px 14px;border:1px solid var(--bd);border-radius:6px;background:var(--card);color:var(--tx);font-size:13px;cursor:pointer;transition:all .15s;white-space:nowrap}
+.btn:hover{background:#f1f5f9}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn-primary{background:var(--blue);color:#fff;border-color:var(--blue)}
+.btn-primary:hover{background:var(--blue-h)}
+.btn-success{color:var(--green);border-color:var(--green)}
+.btn-success:hover{background:var(--green-bg)}
+.btn-warning{color:#d97706;border-color:#d97706}
+.btn-warning:hover{background:var(--yellow-bg)}
+.btn-danger{color:var(--red);border-color:var(--red)}
+.btn-danger:hover{background:var(--red-bg)}
+.btn-sm{padding:4px 10px;font-size:12px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:var(--rad);box-shadow:var(--sh);overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead{background:#f8fafc}
+th{text-align:left;padding:10px 14px;font-weight:600;font-size:12px;color:var(--tx2);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--bd)}
+td{padding:10px 14px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#fafbfc}
+.mono{font-family:'SF Mono',Menlo,Consolas,monospace;font-size:12px}
+.badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:500}
+.badge-running{background:var(--green-bg);color:#065f46}
+.badge-starting{background:var(--yellow-bg);color:#92400e}
+.badge-stopped{background:var(--gray-bg);color:var(--gray)}
+.badge-stopping{background:#dbeafe;color:#1e40af}
+.badge-error{background:var(--red-bg);color:#991b1b}
+.error-msg{font-size:11px;color:var(--red);margin-top:2px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:default}
+.actions{display:flex;gap:6px;flex-wrap:nowrap}
+.empty{padding:48px 24px;text-align:center;color:var(--tx2)}
+.stats{margin-top:12px;font-size:12px;color:var(--tx2)}
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:100}
+.modal{background:var(--card);border-radius:12px;width:520px;max-width:90vw;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.15)}
+.modal-sm{width:380px}
+.modal-head{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--bd)}
+.modal-head h2{font-size:16px;font-weight:600}
+.modal-close{background:none;border:none;font-size:20px;cursor:pointer;color:var(--tx2);padding:4px}
+.modal-close:hover{color:var(--tx)}
+.modal-body{padding:20px}
+.modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:16px 20px;border-top:1px solid var(--bd)}
+.form-section{margin-bottom:16px}
+.form-section-title{font-size:13px;font-weight:600;color:var(--tx2);margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.si{font-style:normal}
+.lh{font-weight:400;color:var(--tx3)}
+.fg{margin-bottom:10px}
+.fg label{display:block;font-size:12px;font-weight:500;color:var(--tx2);margin-bottom:4px}
+.fg input,.fg select{width:100%;padding:7px 10px;border:1px solid var(--bd);border-radius:6px;font-size:13px;outline:none;transition:border-color .15s}
+.fg input:focus{border-color:var(--blue)}
+.fr{display:flex;gap:12px}
+.fr .fg{flex:1}
+.check-label{display:flex;align-items:center;gap:6px;cursor:pointer}
+.check-label input{width:auto}
+.confirm-text{font-size:14px;line-height:1.6}
+.toasts{position:fixed;top:16px;right:16px;z-index:200;display:flex;flex-direction:column;gap:8px}
+.toast{padding:10px 16px;border-radius:8px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.1);animation:slideIn .2s}
+.toast-success{background:var(--green-bg);color:#065f46}
+.toast-error{background:var(--red-bg);color:#991b1b}
+.toast-info{background:#dbeafe;color:#1e40af}
+@keyframes slideIn{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}
+.toggle{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx2);cursor:pointer}
+</style>
+</head>
+<body>
+<div id="app" style="display:none">
+  <header>
+    <div class="header-inner">
+      <h1>rs-f4ss</h1>
+      <span class="tag" v-if="version">v{{ version }}</span>
+      <span style="flex:1"></span>
+      <span class="health" :class="healthy ? 'health-ok' : 'health-down'" :title="healthy ? '服务正常' : '服务异常'"></span>
+    </div>
+  </header>
+
+  <div class="container">
+    <div class="tabs">
+      <div class="tab" :class="{active:tab==='mounts'}" @click="tab='mounts'">挂载管理</div>
+      <div class="tab" :class="{active:tab==='shares'}" @click="tab='shares'">共享管理</div>
+    </div>
+
+    <!-- Mounts Tab -->
+    <template v-if="tab==='mounts'">
+      <div class="toolbar">
+        <button class="btn btn-primary" @click="openCreateMount" :disabled="busy">+ 添加挂载</button>
+        <div class="toolbar-right">
+          <button class="btn" @click="refresh">刷新</button>
+          <label class="toggle"><input type="checkbox" v-model="autoRefresh"> 自动刷新</label>
+        </div>
+      </div>
+      <div class="card">
+        <table v-if="mounts.length">
+          <thead><tr><th>ID</th><th>URL</th><th>挂载点</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody>
+            <tr v-for="m in mounts" :key="m.id">
+              <td class="mono">{{ m.id }}</td>
+              <td class="mono">{{ m.url }}</td>
+              <td class="mono">{{ m.mountpoint }}</td>
+              <td>
+                <span class="badge" :class="badgeCls(m.state)">{{ stateText(m.state) }}</span>
+                <div class="error-msg" v-if="errMsg(m.state)" :title="errMsg(m.state)">{{ errMsg(m.state) }}</div>
+              </td>
+              <td class="actions">
+                <button v-if="isActive(m.state)" class="btn btn-sm btn-warning" @click="askStopMount(m.id)" :disabled="busy">停止</button>
+                <button v-if="isIdle(m.state)" class="btn btn-sm btn-success" @click="doStartMount(m.id)" :disabled="busy">启动</button>
+                <button v-if="isIdle(m.state)" class="btn btn-sm" @click="openEditMount(m)" :disabled="busy">编辑</button>
+                <button v-if="isIdle(m.state)" class="btn btn-sm btn-danger" @click="askDeleteMount(m.id)" :disabled="busy">删除</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-else class="empty">
+          <p>暂无挂载点</p>
+          <p>点击「添加挂载」创建第一个挂载点</p>
+        </div>
+      </div>
+      <div class="stats" v-if="mounts.length">
+        {{ mountStats.total }} 个挂载点 · {{ mountStats.running }} 运行中 · {{ mountStats.stopped }} 已停止<span v-if="mountStats.errors"> · {{ mountStats.errors }} 错误</span>
+      </div>
+    </template>
+
+    <!-- Shares Tab -->
+    <template v-if="tab==='shares'">
+      <div class="toolbar">
+        <button class="btn btn-primary" @click="openCreateShare" :disabled="busy">+ 添加共享</button>
+        <div class="toolbar-right">
+          <button class="btn" @click="refresh">刷新</button>
+          <label class="toggle"><input type="checkbox" v-model="autoRefresh"> 自动刷新</label>
+        </div>
+      </div>
+      <div class="card">
+        <table v-if="shares.length">
+          <thead><tr><th>ID</th><th>本地路径</th><th>监听地址</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody>
+            <tr v-for="s in shares" :key="s.id">
+              <td class="mono">{{ s.id }}</td>
+              <td class="mono">{{ s.path }}</td>
+              <td class="mono">{{ s.addr }}</td>
+              <td>
+                <span class="badge" :class="badgeCls(s.state)">{{ stateText(s.state) }}</span>
+                <div class="error-msg" v-if="errMsg(s.state)" :title="errMsg(s.state)">{{ errMsg(s.state) }}</div>
+              </td>
+              <td class="actions">
+                <button v-if="isActive(s.state)" class="btn btn-sm btn-warning" @click="askStopShare(s.id)" :disabled="busy">停止</button>
+                <button v-if="isIdle(s.state)" class="btn btn-sm btn-success" @click="doStartShare(s.id)" :disabled="busy">启动</button>
+                <button v-if="isIdle(s.state)" class="btn btn-sm" @click="openEditShare(s)" :disabled="busy">编辑</button>
+                <button v-if="isIdle(s.state)" class="btn btn-sm btn-danger" @click="askDeleteShare(s.id)" :disabled="busy">删除</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div v-else class="empty">
+          <p>暂无共享</p>
+          <p>点击「添加共享」创建第一个文件共享</p>
+        </div>
+      </div>
+      <div class="stats" v-if="shares.length">
+        {{ shareStats.total }} 个共享 · {{ shareStats.running }} 运行中 · {{ shareStats.stopped }} 已停止<span v-if="shareStats.errors"> · {{ shareStats.errors }} 错误</span>
+      </div>
+    </template>
+  </div>
+
+  <!-- Mount Form Modal -->
+  <div class="overlay" v-if="showMountForm" @click.self="showMountForm=false">
+    <div class="modal">
+      <div class="modal-head">
+        <h2>{{ editingMount ? '编辑挂载' : '添加挂载' }}</h2>
+        <button class="modal-close" @click="showMountForm=false">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-section">
+          <div class="form-section-title"><i class="si">&#9881;</i> 基本信息</div>
+          <div class="fg"><label>ID</label><input v-model="mountForm.id" :disabled="editingMount" placeholder="my-mount"></div>
+          <div class="fg"><label>远程地址 (URL)</label><input v-model="mountForm.url" placeholder="http://localhost:9000"></div>
+          <div class="fg"><label>挂载点路径</label><input v-model="mountForm.mountpoint" placeholder="/mnt/my-mount 或 Z:"></div>
+          <div class="fg"><label class="check-label"><input type="checkbox" v-model="mountForm.read_only"> 只读模式</label></div>
+        </div>
+        <div class="form-section">
+          <div class="form-section-title"><i class="si">&#128274;</i> 认证 <span class="lh">(可选)</span></div>
+          <div class="fr">
+            <div class="fg"><label>用户名</label><input v-model="mountForm.username" placeholder="留空即不使用"></div>
+            <div class="fg"><label>密码 <span class="lh" v-if="editingMount">留空即清除</span></label><input type="password" v-model="mountForm.password" :placeholder="editingMount ? '留空清除' : '留空即不使用'"></div>
+          </div>
+        </div>
+        <div class="form-section">
+          <div class="form-section-title"><i class="si">&#9889;</i> 缓存设置</div>
+          <div class="fr">
+            <div class="fg"><label>TTL (秒)</label><input type="number" v-model.number="mountForm.cache_ttl_secs" min="0"></div>
+            <div class="fg"><label>最大条数</label><input type="number" v-model.number="mountForm.cache_size" min="0"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" @click="showMountForm=false">取消</button>
+        <button class="btn btn-primary" @click="saveMount" :disabled="busy||!mountForm.id||!mountForm.url||!mountForm.mountpoint">{{ busy ? '处理中...' : (editingMount ? '保存修改' : '创建挂载') }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Share Form Modal -->
+  <div class="overlay" v-if="showShareForm" @click.self="showShareForm=false">
+    <div class="modal">
+      <div class="modal-head">
+        <h2>{{ editingShare ? '编辑共享' : '添加共享' }}</h2>
+        <button class="modal-close" @click="showShareForm=false">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-section">
+          <div class="form-section-title"><i class="si">&#9881;</i> 基本信息</div>
+          <div class="fg"><label>ID</label><input v-model="shareForm.id" :disabled="editingShare" placeholder="my-share"></div>
+          <div class="fg"><label>本地路径</label><input v-model="shareForm.path" placeholder="/data/files"></div>
+          <div class="fg"><label>监听地址</label><input v-model="shareForm.addr" placeholder="0.0.0.0:8081"></div>
+          <div class="fg"><label class="check-label"><input type="checkbox" v-model="shareForm.read_only"> 只读模式</label></div>
+        </div>
+        <div class="form-section">
+          <div class="form-section-title"><i class="si">&#128274;</i> 认证 <span class="lh">(可选)</span></div>
+          <div class="fr">
+            <div class="fg"><label>用户名</label><input v-model="shareForm.user" placeholder="留空即不使用"></div>
+            <div class="fg"><label>密码</label><input type="password" v-model="shareForm.pass" :placeholder="editingShare ? '留空清除' : '留空即不使用'"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" @click="showShareForm=false">取消</button>
+        <button class="btn btn-primary" @click="saveShare" :disabled="busy||!shareForm.id||!shareForm.path||!shareForm.addr">{{ busy ? '处理中...' : (editingShare ? '保存修改' : '创建共享') }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirm Modal -->
+  <div class="overlay" v-if="showConfirm" @click.self="showConfirm=false">
+    <div class="modal modal-sm">
+      <div class="modal-body"><p class="confirm-text">{{ confirmMsg }}</p></div>
+      <div class="modal-foot">
+        <button class="btn" @click="showConfirm=false">取消</button>
+        <button class="btn btn-danger" @click="doConfirm" :disabled="busy">{{ busy ? '处理中...' : '确定' }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toasts -->
+  <div class="toasts">
+    <div v-for="t in toasts" :key="t.id" class="toast" :class="'toast-'+t.type">{{ t.msg }}</div>
+  </div>
+</div>
+
+<div id="fallback" style="display:none">
+  <h2>无法加载 Web UI</h2>
+  <p>rs-f4ss Web UI 加载失败，请刷新页面重试</p>
+  <p style="margin-top:16px">您也可以通过 REST API 管理：<code>curl http://HOST:PORT/api/mounts</code></p>
+</div>
+
+<script src="/vue.js"></script>
+<script>
+if(typeof Vue==='undefined'){document.getElementById('fallback').style.display='block'}
+else{document.getElementById('app').style.display='';document.getElementById('fallback').style.display='none';(function(){
+const{createApp,ref,reactive,computed,watch,onMounted,onUnmounted}=Vue
+createApp({setup(){
+  const tab=ref('mounts')
+  const mounts=ref([]),shares=ref([]),version=ref(''),healthy=ref(false),autoRefresh=ref(true)
+  const showMountForm=ref(false),showShareForm=ref(false),showConfirm=ref(false)
+  const editingMount=ref(false),editingShare=ref(false),busy=ref(false)
+  const confirmMsg=ref(''),confirmFn=ref(null),toasts=ref([])
+  const mountForm=reactive({id:'',url:'',mountpoint:'',read_only:false,username:'',password:'',cache_ttl_secs:5,cache_size:256})
+  const shareForm=reactive({id:'',path:'',addr:'0.0.0.0:8081',read_only:false,user:'',pass:''})
+  let timer=null,nextId=0
+
+  const mountStats=computed(()=>{
+    let r=0,s=0,e=0
+    for(const m of mounts.value){
+      if(m.state==='Running')r++
+      else if(m.state==='Stopped')s++
+      else if(m.state&&typeof m.state==='object'&&m.state.Error)e++
+    }
+    return{total:mounts.value.length,running:r,stopped:s,errors:e}
+  })
+
+  const shareStats=computed(()=>{
+    let r=0,s=0,e=0
+    for(const sh of shares.value){
+      if(sh.state==='Running')r++
+      else if(sh.state==='Stopped')s++
+      else if(sh.state&&typeof sh.state==='object'&&sh.state.Error)e++
+    }
+    return{total:shares.value.length,running:r,stopped:s,errors:e}
+  })
+
+  async function api(method,path,body){
+    const o={method,headers:{}}
+    if(body){o.headers['Content-Type']='application/json';o.body=JSON.stringify(body)}
+    const res=await fetch('/api'+path,o)
+    const t=await res.text()
+    let data=null
+    if(t){try{data=JSON.parse(t)}catch{data={error:t}}}
+    return{ok:res.ok,status:res.status,data}
+  }
+
+  async function refresh(){
+    try{
+      const[hr,vr,lr]=await Promise.all([
+        api('GET','/health'),
+        api('GET','/version'),
+        api('GET','/mounts')
+      ])
+      healthy.value=hr.ok
+      if(vr.ok&&vr.data)version.value=vr.data.version
+      if(lr.ok)mounts.value=lr.data
+      // Shares may not be available if serve feature is off
+      try{
+        const sr=await api('GET','/shares')
+        if(sr.ok)shares.value=sr.data||[]
+      }catch{shares.value=[]}
+    }catch{healthy.value=false}
+  }
+
+  function badgeCls(s){
+    if(s==='Running')return'badge-running'
+    if(s==='Starting')return'badge-starting'
+    if(s==='Stopped')return'badge-stopped'
+    if(s==='Stopping')return'badge-stopping'
+    if(s&&typeof s==='object'&&s.Error)return'badge-error'
+    return'badge-stopped'
+  }
+  function stateText(s){
+    if(typeof s==='string')return{Running:'运行中',Starting:'启动中',Stopped:'已停止',Stopping:'停止中'}[s]||s
+    if(s&&s.Error)return'错误'
+    return'未知'
+  }
+  function errMsg(s){return s&&typeof s==='object'&&s.Error?s.Error:''}
+  function isActive(s){return s==='Running'||s==='Starting'||s==='Stopping'}
+  function isIdle(s){return s==='Stopped'||(s&&typeof s==='object'&&s.Error)}
+
+  // ── Mount actions ──
+
+  function openCreateMount(){
+    editingMount.value=false
+    Object.assign(mountForm,{id:'',url:'',mountpoint:'',read_only:false,username:'',password:'',cache_ttl_secs:5,cache_size:256})
+    showMountForm.value=true
+  }
+  function openEditMount(m){
+    editingMount.value=true
+    Object.assign(mountForm,{id:m.id,url:m.url,mountpoint:m.mountpoint,read_only:m.read_only,username:'',password:'',cache_ttl_secs:m.cache_ttl_secs||5,cache_size:m.cache_size||256})
+    showMountForm.value=true
+  }
+  async function saveMount(){
+    busy.value=true
+    try{
+      const body={id:mountForm.id,url:mountForm.url,mountpoint:mountForm.mountpoint,read_only:mountForm.read_only,cache_ttl_secs:Number(mountForm.cache_ttl_secs)||5,cache_size:Number(mountForm.cache_size)||256}
+      if(editingMount.value||mountForm.username)body.username=mountForm.username
+      if(editingMount.value||mountForm.password)body.password=mountForm.password
+      const res=editingMount.value?await api('PUT','/mounts/'+mountForm.id,body):await api('POST','/mounts',body)
+      if(res.ok){toast(editingMount.value?'配置已更新':'挂载点已创建','success');showMountForm.value=false;refresh()}
+      else toast(res.data?.error||(editingMount.value?'更新失败':'创建失败'),'error')
+    }finally{busy.value=false}
+  }
+  async function doStartMount(id){
+    busy.value=true
+    try{
+      const res=await api('POST','/mounts/'+id+'/start')
+      if(res.ok){toast(id+' 正在启动...','success');setTimeout(refresh,1000)}
+      else toast(res.data?.error||'启动失败','error')
+    }finally{busy.value=false}
+  }
+  function askStopMount(id){
+    confirmMsg.value='确定要停止挂载「'+id+'」吗？'
+    confirmFn.value=async()=>{
+      busy.value=true
+      try{const r=await api('POST','/mounts/'+id+'/stop');if(r.ok){toast(id+' 已停止','success');setTimeout(refresh,500)}else toast(r.data?.error||'停止失败','error')}finally{busy.value=false}
+    };showConfirm.value=true
+  }
+  function askDeleteMount(id){
+    confirmMsg.value='确定要删除挂载「'+id+'」吗？此操作不可恢复。'
+    confirmFn.value=async()=>{
+      busy.value=true
+      try{const r=await api('DELETE','/mounts/'+id);if(r.ok){toast(id+' 已删除','success');refresh()}else toast(r.data?.error||'删除失败','error')}finally{busy.value=false}
+    };showConfirm.value=true
+  }
+
+  // ── Share actions ──
+
+  function openCreateShare(){
+    editingShare.value=false
+    Object.assign(shareForm,{id:'',path:'',addr:'0.0.0.0:8081',read_only:false,user:'',pass:''})
+    showShareForm.value=true
+  }
+  function openEditShare(s){
+    editingShare.value=true
+    Object.assign(shareForm,{id:s.id,path:s.path,addr:s.addr,read_only:s.read_only,user:'',pass:''})
+    showShareForm.value=true
+  }
+  async function saveShare(){
+    busy.value=true
+    try{
+      const body={id:shareForm.id,path:shareForm.path,addr:shareForm.addr,read_only:shareForm.read_only}
+      if(editingShare.value||shareForm.user)body.user=shareForm.user
+      if(editingShare.value||shareForm.pass)body.pass=shareForm.pass
+      const res=editingShare.value?await api('PUT','/shares/'+shareForm.id,body):await api('POST','/shares',body)
+      if(res.ok){toast(editingShare.value?'共享配置已更新':'共享已创建','success');showShareForm.value=false;refresh()}
+      else toast(res.data?.error||(editingShare.value?'更新失败':'创建失败'),'error')
+    }finally{busy.value=false}
+  }
+  async function doStartShare(id){
+    busy.value=true
+    try{
+      const res=await api('POST','/shares/'+id+'/start')
+      if(res.ok){toast(id+' 正在启动...','success');setTimeout(refresh,1000)}
+      else toast(res.data?.error||'启动失败','error')
+    }finally{busy.value=false}
+  }
+  function askStopShare(id){
+    confirmMsg.value='确定要停止共享「'+id+'」吗？'
+    confirmFn.value=async()=>{
+      busy.value=true
+      try{const r=await api('POST','/shares/'+id+'/stop');if(r.ok){toast(id+' 已停止','success');setTimeout(refresh,500)}else toast(r.data?.error||'停止失败','error')}finally{busy.value=false}
+    };showConfirm.value=true
+  }
+  function askDeleteShare(id){
+    confirmMsg.value='确定要删除共享「'+id+'」吗？此操作不可恢复。'
+    confirmFn.value=async()=>{
+      busy.value=true
+      try{const r=await api('DELETE','/shares/'+id);if(r.ok){toast(id+' 已删除','success');refresh()}else toast(r.data?.error||'删除失败','error')}finally{busy.value=false}
+    };showConfirm.value=true
+  }
+
+  async function doConfirm(){showConfirm.value=false;if(confirmFn.value)await confirmFn.value()}
+
+  function toast(msg,type='info'){const id=nextId++;toasts.value.push({id,msg,type});setTimeout(()=>{toasts.value=toasts.value.filter(t=>t.id!==id)},type==='error'?5000:3000)}
+  function startPoll(){stopPoll();timer=setInterval(refresh,3000)}
+  function stopPoll(){if(timer){clearInterval(timer);timer=null}}
+  function onKey(e){if(e.key==='Escape'){if(showConfirm.value)showConfirm.value=false;else if(showShareForm.value)showShareForm.value=false;else if(showMountForm.value)showMountForm.value=false}}
+  watch(autoRefresh,v=>{v?startPoll():stopPoll()})
+  onMounted(()=>{document.addEventListener('keydown',onKey);refresh();startPoll()})
+  onUnmounted(()=>{document.removeEventListener('keydown',onKey);stopPoll()})
+
+  return{tab,mounts,shares,version,healthy,autoRefresh,showMountForm,showShareForm,showConfirm,editingMount,editingShare,busy,confirmMsg,toasts,mountForm,shareForm,mountStats,shareStats,
+    badgeCls,stateText,errMsg,isActive,isIdle,refresh,
+    openCreateMount,openEditMount,saveMount,doStartMount,askStopMount,askDeleteMount,
+    openCreateShare,openEditShare,saveShare,doStartShare,askStopShare,askDeleteShare,
+    doConfirm}
+}}).mount('#app')
+})()}
+</script>
+</body>
+</html>
