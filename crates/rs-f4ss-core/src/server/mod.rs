@@ -371,6 +371,41 @@ pub(crate) fn content_type_for(path: &Path) -> &'static str {
     }
 }
 
+/// Should this file be served with `Content-Disposition: attachment`?
+///
+/// Used to neuter stored-XSS vectors: any uploaded `.html`/`.htm`/`.svg` would
+/// otherwise execute scripts in the share-server origin and inherit Basic
+/// Auth on every fetch. Forcing download (or letting the user explicitly
+/// re-host HTML on a different origin) keeps the share origin sandboxed.
+pub(crate) fn forces_download(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some("html" | "htm" | "svg")
+    )
+}
+
+/// Compute a weak ETag from a directory listing's metadata.
+///
+/// Format: `W/"<count>-<max_mtime_secs>-<sum_size>"`. Changes whenever
+/// entries are added/removed, any entry's mtime advances, or aggregate size
+/// shifts. Weak because we don't byte-verify, but cheap and stable.
+pub(crate) fn dir_etag(entries: &[EntryMeta]) -> String {
+    let mut max_mtime: u64 = 0;
+    let mut sum_size: u64 = 0;
+    for e in entries {
+        if let Ok(d) = e.mtime.duration_since(std::time::SystemTime::UNIX_EPOCH) {
+            if d.as_secs() > max_mtime {
+                max_mtime = d.as_secs();
+            }
+        }
+        sum_size = sum_size.wrapping_add(e.size);
+    }
+    format!("W/\"{}-{}-{}\"", entries.len(), max_mtime, sum_size)
+}
+
 /// Parse Range header. Returns (start, end) inclusive, or None if invalid.
 pub(crate) fn parse_range(range_header: &str, file_size: u64) -> Option<(u64, u64)> {
     let range = range_header.strip_prefix("bytes=")?;
@@ -632,5 +667,62 @@ mod tests {
             crate::persistence::sha256_hex("secret"),
         ));
         assert!(state.check_auth(&HeaderMap::new()).is_err());
+    }
+
+    // --- forces_download / dir_etag (review round 2) ---
+
+    #[test]
+    fn test_forces_download_html_and_svg() {
+        // HTML / HTM / SVG: force attachment to neuter stored-XSS in share origin.
+        assert!(forces_download(Path::new("/tmp/evil.html")));
+        assert!(forces_download(Path::new("/tmp/evil.htm")));
+        assert!(forces_download(Path::new("/tmp/evil.HTML")));
+        assert!(forces_download(Path::new("/tmp/logo.svg")));
+    }
+
+    #[test]
+    fn test_forces_download_false_for_other_types() {
+        // Images, archives, plain text, and unknown extensions must NOT force
+        // download — we don't want to surprise users by changing link semantics.
+        assert!(!forces_download(Path::new("/tmp/pic.png")));
+        assert!(!forces_download(Path::new("/tmp/doc.pdf")));
+        assert!(!forces_download(Path::new("/tmp/archive.zip")));
+        assert!(!forces_download(Path::new("/tmp/notes.md")));
+        assert!(!forces_download(Path::new("/tmp/notes.txt")));
+        assert!(!forces_download(Path::new("/tmp/noext")));
+    }
+
+    #[test]
+    fn test_dir_etag_stable_when_no_changes() {
+        let e1 = vec![entry_meta("a", 100, 1749103800), entry_meta("b", 200, 1749103800)];
+        let e2 = vec![entry_meta("a", 100, 1749103800), entry_meta("b", 200, 1749103800)];
+        assert_eq!(dir_etag(&e1), dir_etag(&e2));
+    }
+
+    #[test]
+    fn test_dir_etag_changes_on_count_or_mtime() {
+        let baseline = vec![entry_meta("a", 100, 1749103800)];
+        let added = vec![entry_meta("a", 100, 1749103800), entry_meta("b", 0, 1749103800)];
+        let newer = vec![entry_meta("a", 100, 1749103801)];
+        let bigger = vec![entry_meta("a", 101, 1749103800)];
+        assert_ne!(dir_etag(&baseline), dir_etag(&added), "added entry");
+        assert_ne!(dir_etag(&baseline), dir_etag(&newer), "mtime tick");
+        assert_ne!(dir_etag(&baseline), dir_etag(&bigger), "size change");
+    }
+
+    #[test]
+    fn test_dir_etag_empty_list() {
+        // Edge case: empty directory should still produce a valid (weak) ETag.
+        let etag = dir_etag(&[]);
+        assert!(etag.starts_with("W/\"0-"));
+    }
+
+    fn entry_meta(name: &str, size: u64, mtime_secs: u64) -> EntryMeta {
+        EntryMeta {
+            name: name.to_string(),
+            is_dir: false,
+            size,
+            mtime: std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(mtime_secs),
+        }
     }
 }

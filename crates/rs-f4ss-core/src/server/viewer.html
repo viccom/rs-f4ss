@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
+<!-- Modern evergreen only: ES2017+ baseline (async/await, fetch, URL, optional chaining).
+     Chrome 80+ / Firefox 72+ / Safari 13.1+ / Edge 80+. No IE / Safari < 13. -->
 <title>rs-f4ss · 文件库</title>
 <!-- Self-contained: relies on system serif/sans/mono via the --font-* tokens below. -->
 
@@ -564,7 +566,7 @@ a{ color: inherit; text-decoration: none; }
     </div>
 
     <div class="top-actions">
-      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换主题">
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换主题" aria-pressed="false">
         <svg id="themeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
       </button>
       <div class="avatar" title="访客" aria-label="访客">客</div>
@@ -623,10 +625,10 @@ a{ color: inherit; text-decoration: none; }
 
         <div class="view-controls">
           <div class="view-toggle" role="group" aria-label="视图">
-            <button class="on" id="vGrid" aria-label="网格视图">
+            <button class="on" id="vGrid" aria-label="网格视图" aria-pressed="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.4"/><rect x="14" y="3" width="7" height="7" rx="1.4"/><rect x="3" y="14" width="7" height="7" rx="1.4"/><rect x="14" y="14" width="7" height="7" rx="1.4"/></svg>
             </button>
-            <button id="vList" aria-label="列表视图">
+            <button id="vList" aria-label="列表视图" aria-pressed="false">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1.2"/><circle cx="4" cy="12" r="1.2"/><circle cx="4" cy="18" r="1.2"/></svg>
             </button>
           </div>
@@ -670,7 +672,7 @@ a{ color: inherit; text-decoration: none; }
 
 </div>
 
-<aside class="inspector glass" id="inspector" aria-label="文件详情" aria-hidden="true">
+<aside class="inspector glass" id="inspector" role="dialog" aria-modal="false" aria-labelledby="inspTitle" aria-hidden="true">
   <button class="insp-close" id="inspClose" aria-label="关闭">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
   </button>
@@ -693,10 +695,10 @@ a{ color: inherit; text-decoration: none; }
   </div>
 </aside>
 
-<div class="dropzone" id="dropzone" aria-hidden="true">
+<div class="dropzone" id="dropzone" role="dialog" aria-modal="false" aria-labelledby="dropzoneHeading" aria-hidden="true">
   <div class="drop-card">
     <div class="ring"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17V3M5 10l7-7 7 7M5 21h14"/></svg></div>
-    <h3>松手即上传</h3>
+    <h3 id="dropzoneHeading">松手即上传</h3>
     <p id="dropHint">支持多文件 · 上限 2 GB</p>
   </div>
 </div>
@@ -727,6 +729,13 @@ a{ color: inherit; text-decoration: none; }
       } else {
         icon.innerHTML = '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>';
       }
+    }
+    // Sync aria-pressed so screen readers announce the toggle state.
+    const tb = document.getElementById('themeBtn');
+    if (tb) {
+      const isDark = theme === 'dark' ||
+        (theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+      tb.setAttribute('aria-pressed', isDark ? 'true' : 'false');
     }
   }
   function initTheme() {
@@ -837,8 +846,8 @@ a{ color: inherit; text-decoration: none; }
     const isDir = e.kind === 'folder';
     const badge = isDir ? 'DIR' : (e.ext || e.kind || 'FILE').toUpperCase().slice(0, 4);
     const kind = isDir ? 'folder' : e.kind;
-    const meta = isDir ? (e.child_count != null ? e.child_count + ' 项' : '—') : (fmtSize(e.size) + (e.mtime ? ' <span class="dot"></span> ' + esc(fmtTime(e.mtime)) : ''));
-    return '<article class="tile' + (isDir ? ' is-folder' : '') + '" tabindex="0" data-name="' + esc(e.name) + '" data-kind="' + esc(kind) + '" data-href="' + esc(e.href) + '" data-idx="' + idx + '" style="animation-delay:' + Math.min(idx, 12) * 0.04 + 's">' +
+    const meta = isDir ? '—' : (fmtSize(e.size) + (e.mtime ? ' <span class="dot"></span> ' + esc(fmtTime(e.mtime)) : ''));
+    return '<article class="tile' + (isDir ? ' is-folder' : '') + '" tabindex="0" role="button" aria-label="' + esc(e.name + (isDir ? ' 文件夹' : ' 文件')) + '" data-name="' + esc(e.name) + '" data-kind="' + esc(kind) + '" data-href="' + esc(e.href) + '" data-idx="' + idx + '" style="animation-delay:' + Math.min(idx, 12) * 0.04 + 's">' +
       '<div class="tile-head"><span class="type-badge" data-t="' + esc(kind) + '">' + esc(badge) + '</span></div>' +
       '<div class="thumb"><div class="thumb-icon">' + iconForKind(kind, e.name) + '</div></div>' +
       '<div class="tile-foot"><div class="fname">' + esc(e.name) + '</div><div class="fmeta">' + meta + '</div></div>' +
@@ -853,7 +862,7 @@ a{ color: inherit; text-decoration: none; }
   function rowHTML(e) {
     const isDir = e.kind === 'folder';
     const kind = isDir ? 'folder' : e.kind;
-    return '<div class="row" data-name="' + esc(e.name) + '" data-kind="' + esc(kind) + '" data-href="' + esc(e.href) + '">' +
+    return '<div class="row" tabindex="0" role="button" aria-label="' + esc(e.name + (isDir ? ' 文件夹' : ' 文件')) + '" data-name="' + esc(e.name) + '" data-kind="' + esc(kind) + '" data-href="' + esc(e.href) + '">' +
       '<span class="ic">' + iconForKind(kind, e.name) + '</span>' +
       '<span class="rname">' + esc(e.name) + '</span>' +
       '<span class="rtype">' + esc(isDir ? '文件夹' : (e.ext || e.kind || '文件').toUpperCase()) + '</span>' +
@@ -997,8 +1006,16 @@ a{ color: inherit; text-decoration: none; }
   const ws = document.getElementById('workspace');
   const vg = document.getElementById('vGrid');
   const vl = document.getElementById('vList');
-  vg.addEventListener('click', function(){ ws.classList.remove('is-list'); vg.classList.add('on'); vl.classList.remove('on'); });
-  vl.addEventListener('click', function(){ ws.classList.add('is-list'); vl.classList.add('on'); vg.classList.remove('on'); });
+  vg.addEventListener('click', function(){
+    ws.classList.remove('is-list');
+    vg.classList.add('on'); vg.setAttribute('aria-pressed', 'true');
+    vl.classList.remove('on'); vl.setAttribute('aria-pressed', 'false');
+  });
+  vl.addEventListener('click', function(){
+    ws.classList.add('is-list');
+    vl.classList.add('on'); vl.setAttribute('aria-pressed', 'true');
+    vg.classList.remove('on'); vg.setAttribute('aria-pressed', 'false');
+  });
 
   // ---------- 导航 ----------
   function go(href) {
@@ -1164,7 +1181,18 @@ a{ color: inherit; text-decoration: none; }
 
   // ---------- 键盘 ----------
   document.addEventListener('keydown', function(e){
-    if (e.key === 'Escape') { hideInspector(); return; }
+    if (e.key === 'Escape') {
+      // Dropzone (open via drag-enter) takes priority over inspector —
+      // a stale drag overlay is more annoying to dismiss than a side panel.
+      if (dz.classList.contains('show')) {
+        dz.classList.remove('show');
+        dz.setAttribute('aria-hidden', 'true');
+        dragCount = 0;
+        return;
+      }
+      hideInspector();
+      return;
+    }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault();
       document.getElementById('searchInput').focus();
@@ -1172,6 +1200,18 @@ a{ color: inherit; text-decoration: none; }
     if (e.key === 'Backspace' && selected && !readOnly) {
       const entry = (DATA.entries || []).find(function(x){ return x.name === selected.getAttribute('data-name'); });
       if (entry) { e.preventDefault(); del(entry); }
+    }
+  });
+
+  // Per-tile / per-row keyboard activation: Enter or Space mirrors a click,
+  // since <article>/<div role="button"> don't get the implicit Enter/Space
+  // mapping that real <button> elements do.
+  scrollArea.addEventListener('keydown', function(e){
+    const target = e.target.closest('.tile, .row');
+    if (!target) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      selectTile(target);
     }
   });
 

@@ -10,7 +10,10 @@ use axum::response::{IntoResponse, Response};
 use super::autoindex;
 use super::viewer;
 use super::FileServerState;
-use super::{content_type_for, file_to_body, format_http_date, parse_range, write_body_to_file};
+use super::{
+    content_type_for, dir_etag, file_to_body, forces_download, format_http_date, parse_range,
+    write_body_to_file,
+};
 
 // ---------------------------------------------------------------------------
 // GET / HEAD
@@ -65,6 +68,26 @@ async fn handle_get_dir(
         autoindex::generate_autoindex(&entries, url_path)
     };
 
+    let etag = dir_etag(&entries);
+    // Honour If-None-Match: identical listing → 304, skip body serialisation.
+    if !head_only {
+        if let Some(inm) = headers.get("if-none-match").and_then(|v| v.to_str().ok()) {
+            if inm.split(',').any(|tag| tag.trim() == etag) {
+                let mut hdrs = HeaderMap::new();
+                hdrs.insert("etag", HeaderValue::from_str(&etag).unwrap());
+                hdrs.insert(
+                    "x-frame-options",
+                    HeaderValue::from_static("DENY"),
+                );
+                hdrs.insert(
+                    "x-content-type-options",
+                    HeaderValue::from_static("nosniff"),
+                );
+                return (StatusCode::NOT_MODIFIED, hdrs, Body::empty()).into_response();
+            }
+        }
+    }
+
     let body = if head_only {
         Body::empty()
     } else {
@@ -77,6 +100,14 @@ async fn handle_get_dir(
         HeaderValue::from_static("text/html; charset=utf-8"),
     );
     hdrs.insert("cache-control", HeaderValue::from_static("no-cache"));
+    hdrs.insert("etag", HeaderValue::from_str(&etag).unwrap());
+    // Clickjacking: the viewer exposes upload/delete buttons; deny embedding.
+    hdrs.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    // Disable content sniffing for the HTML response (defence in depth).
+    hdrs.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
 
     (StatusCode::OK, hdrs, body).into_response()
 }
@@ -133,6 +164,22 @@ async fn handle_get_file(
         HeaderValue::from_str(&size.to_string()).unwrap(),
     );
     hdrs.insert("accept-ranges", HeaderValue::from_static("bytes"));
+    // nosniff stops browsers from second-guessing the MIME we declared.
+    hdrs.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    // Force download for HTML/SVG to neuter stored-XSS in the share origin.
+    if forces_download(local_path) {
+        let name = local_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("download");
+        hdrs.insert(
+            "content-disposition",
+            HeaderValue::from_str(&format!("attachment; filename=\"{}\"", name)).unwrap(),
+        );
+    }
 
     if let Some(ref lm) = last_modified {
         hdrs.insert("last-modified", HeaderValue::from_str(lm).unwrap());
@@ -178,6 +225,20 @@ async fn serve_range(
         "content-range",
         HeaderValue::from_str(&content_range).unwrap(),
     );
+    hdrs.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    if forces_download(local_path) {
+        let name = local_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("download");
+        hdrs.insert(
+            "content-disposition",
+            HeaderValue::from_str(&format!("attachment; filename=\"{}\"", name)).unwrap(),
+        );
+    }
     if let Some(ref lm) = last_modified {
         hdrs.insert("last-modified", HeaderValue::from_str(lm).unwrap());
     }
