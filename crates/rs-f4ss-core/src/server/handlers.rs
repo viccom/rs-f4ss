@@ -8,6 +8,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 
 use super::autoindex;
+use super::viewer;
 use super::FileServerState;
 use super::{content_type_for, file_to_body, format_http_date, parse_range, write_body_to_file};
 
@@ -27,6 +28,7 @@ pub async fn handle_get(
     info: &FileInfo,
     headers: &HeaderMap,
     url_path: &str,
+    query: Option<&str>,
     head_only: bool,
 ) -> Response {
     if !info.is_dir && !info.is_file {
@@ -34,7 +36,7 @@ pub async fn handle_get(
     }
 
     if info.is_dir {
-        return handle_get_dir(state, local_path, url_path, head_only).await;
+        return handle_get_dir(state, local_path, url_path, query, headers, head_only).await;
     }
 
     handle_get_file(local_path, info.size, headers, head_only).await
@@ -44,6 +46,8 @@ async fn handle_get_dir(
     state: &Arc<FileServerState>,
     local_path: &Path,
     url_path: &str,
+    query: Option<&str>,
+    headers: &HeaderMap,
     head_only: bool,
 ) -> Response {
     let entries = match state.list_dir(local_path).await {
@@ -51,7 +55,13 @@ async fn handle_get_dir(
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
 
-    let html = autoindex::generate_autoindex(&entries, url_path);
+    // Dispatch: browser visitor → embedded SPA; rs-f4ss / curl / etc → autoindex.
+    let html = if viewer::wants_viewer(headers, query) {
+        viewer::render_viewer_html(state, &entries, url_path)
+    } else {
+        autoindex::generate_autoindex(&entries, url_path)
+    };
+
     let body = if head_only {
         Body::empty()
     } else {

@@ -6,6 +6,7 @@
 
 mod autoindex;
 mod handlers;
+mod viewer;
 mod webdav;
 
 use std::path::{Path, PathBuf};
@@ -18,7 +19,6 @@ use axum::response::{IntoResponse, Response};
 use axum::Router;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use tokio::io::AsyncWriteExt;
-use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 // ---------------------------------------------------------------------------
@@ -65,9 +65,13 @@ pub fn create_router(config: FileServerConfig) -> (Router, Arc<FileServerState>)
         auth: config.auth,
     });
 
+    // No CORS layer: the share server is intended for same-origin browser visits
+    // and direct HTTP/WebDAV clients. `CorsLayer::permissive()` short-circuits
+    // OPTIONS preflight and drops the handler's Allow/DAV headers, breaking WebDAV
+    // capability discovery. If cross-origin browser access is needed, place a
+    // reverse proxy (nginx / caddy) in front.
     let router = Router::new()
         .fallback(handle_request)
-        .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
@@ -92,6 +96,7 @@ async fn handle_request(State(state): State<Arc<FileServerState>>, req: Request)
     let uri = req.uri().clone();
     let headers = req.headers().clone();
     let url_path = uri.path().to_string();
+    let query = uri.query().map(|s| s.to_string());
     let body = req.into_body();
 
     // Auth check
@@ -136,7 +141,16 @@ async fn handle_request(State(state): State<Arc<FileServerState>>, req: Request)
     match method {
         Method::GET | Method::HEAD => {
             let head_only = method == Method::HEAD;
-            handlers::handle_get(&state, &local_path, &info, &headers, &url_path, head_only).await
+            handlers::handle_get(
+                &state,
+                &local_path,
+                &info,
+                &headers,
+                &url_path,
+                query.as_deref(),
+                head_only,
+            )
+            .await
         }
         Method::PUT => handlers::handle_put(&state, &local_path, body).await,
         Method::DELETE => handlers::handle_delete(&state, &local_path, is_dir, is_file).await,
