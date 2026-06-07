@@ -75,10 +75,7 @@ async fn handle_get_dir(
             if inm.split(',').any(|tag| tag.trim() == etag) {
                 let mut hdrs = HeaderMap::new();
                 hdrs.insert("etag", HeaderValue::from_str(&etag).unwrap());
-                hdrs.insert(
-                    "x-frame-options",
-                    HeaderValue::from_static("DENY"),
-                );
+                hdrs.insert("x-frame-options", HeaderValue::from_static("DENY"));
                 hdrs.insert(
                     "x-content-type-options",
                     HeaderValue::from_static("nosniff"),

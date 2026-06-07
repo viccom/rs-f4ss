@@ -6,6 +6,7 @@
 
 mod autoindex;
 mod handlers;
+mod static_assets;
 mod viewer;
 mod webdav;
 
@@ -71,6 +72,11 @@ pub fn create_router(config: FileServerConfig) -> (Router, Arc<FileServerState>)
     // capability discovery. If cross-origin browser access is needed, place a
     // reverse proxy (nginx / caddy) in front.
     let router = Router::new()
+        // `/_static/*` is served before the catch-all `handle_request` so
+        // directory lookups (which 404 on missing files) don't shadow asset
+        // requests. The `/_static/` prefix also keeps us out of the WebDAV
+        // namespace, which only sees real filesystem paths.
+        .route("/_static/{file}", axum::routing::get(serve_static_path))
         .fallback(handle_request)
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
@@ -85,6 +91,14 @@ pub async fn serve(config: FileServerConfig, addr: &str) -> Result<(), Box<dyn s
     tracing::info!("File server listening on {addr}");
     axum::serve(listener, router).await?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Static asset dispatch
+// ---------------------------------------------------------------------------
+
+async fn serve_static_path(axum::extract::Path(file): axum::extract::Path<String>) -> Response {
+    static_assets::serve_static(&file).await
 }
 
 // ---------------------------------------------------------------------------
@@ -694,15 +708,24 @@ mod tests {
 
     #[test]
     fn test_dir_etag_stable_when_no_changes() {
-        let e1 = vec![entry_meta("a", 100, 1749103800), entry_meta("b", 200, 1749103800)];
-        let e2 = vec![entry_meta("a", 100, 1749103800), entry_meta("b", 200, 1749103800)];
+        let e1 = vec![
+            entry_meta("a", 100, 1749103800),
+            entry_meta("b", 200, 1749103800),
+        ];
+        let e2 = vec![
+            entry_meta("a", 100, 1749103800),
+            entry_meta("b", 200, 1749103800),
+        ];
         assert_eq!(dir_etag(&e1), dir_etag(&e2));
     }
 
     #[test]
     fn test_dir_etag_changes_on_count_or_mtime() {
         let baseline = vec![entry_meta("a", 100, 1749103800)];
-        let added = vec![entry_meta("a", 100, 1749103800), entry_meta("b", 0, 1749103800)];
+        let added = vec![
+            entry_meta("a", 100, 1749103800),
+            entry_meta("b", 0, 1749103800),
+        ];
         let newer = vec![entry_meta("a", 100, 1749103801)];
         let bigger = vec![entry_meta("a", 101, 1749103800)];
         assert_ne!(dir_etag(&baseline), dir_etag(&added), "added entry");

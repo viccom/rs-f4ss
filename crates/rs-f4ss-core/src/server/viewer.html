@@ -394,10 +394,15 @@ a{ color: inherit; text-decoration: none; }
 .grid{ display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 16px; padding: 4px; }
 
 /* 文件卡 */
-.tile{ position: relative; display: flex; flex-direction: column; border-radius: var(--radius-md); padding: 14px 14px 16px; background: var(--mist-strong); border: 1px solid var(--mist-edge); backdrop-filter: blur(20px) saturate(160%); -webkit-backdrop-filter: blur(20px) saturate(160%); box-shadow: var(--shadow-rest); cursor: pointer; transition: transform .35s var(--ease-spring), box-shadow .35s var(--ease-out), border-color .25s; opacity: 0; animation: tileRise .6s var(--ease-out) forwards; }
+/* Note: no backdrop-filter here. Each tile is ~190×220px and a 60-file
+   directory spawns 60 instances, each sampling the live stage gradient
+   underneath on every frame. On a 1440×900 viewport that can chew 20-30%
+   of CPU continuously. The visual difference vs the glass panels is
+   small at tile-size, so we use a tinted solid background instead. */
+.tile{ position: relative; display: flex; flex-direction: column; border-radius: var(--radius-md); padding: 14px 14px 16px; background: var(--mist-strong); border: 1px solid var(--mist-edge); box-shadow: var(--shadow-rest); cursor: pointer; transition: transform .35s var(--ease-spring), border-color .25s, box-shadow .35s var(--ease-out); opacity: 0; animation: tileRise .6s var(--ease-out) forwards; }
 .tile:focus-visible{ outline: 3px solid var(--celadon-300); outline-offset: 2px; }
 @keyframes tileRise{ from{ opacity:0; transform: translateY(14px) scale(.985); } to{ opacity:1; transform: translateY(0) scale(1); } }
-.tile:hover{ transform: translateY(-4px); box-shadow: var(--shadow-lift); border-color: rgba(255,255,255,0.85); }
+.tile:hover{ transform: translateY(-4px); border-color: rgba(255,255,255,0.85); }
 [data-theme="dark"] .tile:hover, :root.theme-dark .tile:hover{ border-color: rgba(122,166,148,0.30); }
 @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .tile:hover{ border-color: rgba(122,166,148,0.30); } }
 .tile.selected{ border-color: var(--celadon-400); box-shadow: 0 0 0 2px rgba(122,166,148,0.32), var(--shadow-lift); }
@@ -530,6 +535,101 @@ a{ color: inherit; text-decoration: none; }
 /* Toast */
 .toast{ position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(20px); padding: 12px 20px; background: var(--ink-900); color: var(--ivory-soft); border-radius: var(--radius-pill); font-size: 13px; box-shadow: var(--shadow-deep); opacity: 0; pointer-events: none; z-index: 90; transition: opacity .25s, transform .35s var(--ease-spring); max-width: 80vw; }
 .toast.show{ opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ──────────────────────────────────────────────────────────
+   文件预览 Modal（文本 / 图片 / 视频）
+   ────────────────────────────────────────────────────────── */
+.pmodal{ position: fixed; inset: 0; z-index: 85; display: none; align-items: center; justify-content: center; padding: 36px 24px; }
+.pmodal.open{ display: flex; }
+.pmodal-back{ position: absolute; inset: 0; background: rgba(15,22,20,0.55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.pmodal-box{ position: relative; width: min(1100px, 100%); max-height: 100%; background: var(--ivory-soft); border: 1px solid var(--mist-edge); border-radius: var(--radius-lg); box-shadow: var(--shadow-deep); display: flex; flex-direction: column; overflow: hidden; }
+[data-theme="dark"] .pmodal-box, :root.theme-dark .pmodal-box{ background: var(--ivory-soft); }
+.pmodal-head{ display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--mist-edge); background: var(--mist-soft); flex-shrink: 0; }
+.pmodal-title{ flex: 1; min-width: 0; font-family: var(--font-display); font-size: 16px; font-weight: 500; color: var(--ink-900); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pmodal-meta{ font-family: var(--font-mono); font-size: 11px; color: var(--ink-500); white-space: nowrap; }
+.pmodal-btn{ display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 12px; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-700); background: transparent; border: 1px solid transparent; cursor: pointer; transition: background .18s, color .18s, border-color .18s; }
+.pmodal-btn:hover{ background: rgba(122,166,148,0.16); color: var(--ink-900); }
+.pmodal-btn svg{ width: 14px; height: 14px; }
+.pmodal-close{ width: 32px; height: 32px; padding: 0; }
+.pmodal-body{ flex: 1; min-height: 0; overflow: auto; background: var(--ivory); position: relative; }
+[data-theme="dark"] .pmodal-body, :root.theme-dark .pmodal-body{ background: var(--ivory); }
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .pmodal-body{ background: var(--ivory); } }
+
+/* Text view: monospace, line numbers, horizontal scroll */
+.pmodal-text{ display: flex; font-family: var(--font-mono); font-size: 13px; line-height: 1.55; color: var(--ink-700); }
+.pmodal-gutter{ flex-shrink: 0; padding: 16px 12px 16px 18px; text-align: right; user-select: none; color: var(--ink-300); border-right: 1px solid var(--mist-edge); background: rgba(31,51,41,0.03); }
+[data-theme="dark"] .pmodal-gutter, :root.theme-dark .pmodal-gutter{ background: rgba(184,212,197,0.04); color: var(--ink-500); }
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .pmodal-gutter{ background: rgba(184,212,197,0.04); color: var(--ink-500); } }
+.pmodal-gutter span{ display: block; }
+.pmodal-code{ flex: 1; min-width: 0; padding: 16px 18px; white-space: pre; overflow-x: auto; tab-size: 4; }
+.pmodal-code mark{ background: rgba(212,165,116,0.32); color: inherit; border-radius: 2px; padding: 0 1px; }
+
+/* Image view */
+.pmodal-image{ display: flex; align-items: center; justify-content: center; min-height: 200px; padding: 24px; }
+.pmodal-image img{ max-width: 100%; max-height: 75vh; object-fit: contain; border-radius: var(--radius-sm); box-shadow: var(--shadow-soft); }
+.pmodal-image figcaption{ margin-top: 12px; font-family: var(--font-mono); font-size: 11px; color: var(--ink-500); text-align: center; }
+
+/* Video view */
+.pmodal-video{ display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 200px; padding: 24px; gap: 12px; }
+.pmodal-video video{ max-width: 100%; max-height: 75vh; border-radius: var(--radius-sm); box-shadow: var(--shadow-soft); background: #000; }
+
+/* Markdown reading view (rendered with marked) */
+.pmodal-md{ padding: 28px 36px; max-width: 820px; margin: 0 auto; font-family: var(--font-body); font-size: 14px; line-height: 1.75; color: var(--ink-700); overflow-x: hidden; }
+.pmodal-md h1, .pmodal-md h2, .pmodal-md h3, .pmodal-md h4, .pmodal-md h5, .pmodal-md h6{ font-family: var(--font-display); font-weight: 500; color: var(--ink-900); margin: 1.4em 0 0.5em; line-height: 1.3; letter-spacing: -0.01em; }
+.pmodal-md h1{ font-size: 1.8em; border-bottom: 1px solid var(--mist-edge); padding-bottom: 0.3em; }
+.pmodal-md h2{ font-size: 1.4em; }
+.pmodal-md h3{ font-size: 1.2em; }
+.pmodal-md h4, .pmodal-md h5, .pmodal-md h6{ font-size: 1.05em; color: var(--ink-700); }
+.pmodal-md p{ margin: 0.7em 0; }
+.pmodal-md a{ color: var(--celadon-600); text-decoration: none; border-bottom: 1px solid rgba(120,154,136,0.4); transition: border-color 0.15s; }
+.pmodal-md a:hover{ border-bottom-color: var(--celadon-600); }
+.pmodal-md ul, .pmodal-md ol{ padding-left: 1.6em; margin: 0.7em 0; }
+.pmodal-md li{ margin: 0.3em 0; }
+.pmodal-md blockquote{ margin: 1em 0; padding: 0.4em 1em; border-left: 3px solid var(--celadon-300); background: rgba(120,154,136,0.06); color: var(--ink-600); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.pmodal-md code{ font-family: var(--font-mono); font-size: 0.88em; padding: 2px 6px; background: rgba(31,51,41,0.06); border-radius: 3px; color: var(--ink-800); }
+.pmodal-md pre{ margin: 1em 0; padding: 14px 16px; background: rgba(31,51,41,0.04); border: 1px solid var(--mist-edge); border-radius: var(--radius-sm); overflow-x: auto; line-height: 1.5; }
+.pmodal-md pre code{ padding: 0; background: transparent; font-size: 12.5px; }
+.pmodal-md hr{ border: none; border-top: 1px solid var(--mist-edge); margin: 1.6em 0; }
+.pmodal-md img{ max-width: 100%; border-radius: var(--radius-sm); box-shadow: var(--shadow-soft); }
+.pmodal-md-tablewrap{ overflow-x: auto; margin: 1em 0; border: 1px solid var(--mist-edge); border-radius: var(--radius-sm); }
+.pmodal-md-tablewrap table{ border-collapse: collapse; width: 100%; font-size: 13px; }
+.pmodal-md-tablewrap th, .pmodal-md-tablewrap td{ padding: 8px 12px; border-bottom: 1px solid var(--mist-edge); text-align: left; }
+.pmodal-md-tablewrap th{ background: rgba(31,51,41,0.04); font-weight: 500; color: var(--ink-800); }
+.pmodal-md-tablewrap tr:last-child td{ border-bottom: none; }
+[data-theme="dark"] .pmodal-md, :root.theme-dark .pmodal-md{ color: var(--ink-200); }
+[data-theme="dark"] .pmodal-md h1, [data-theme="dark"] .pmodal-md h2, [data-theme="dark"] .pmodal-md h3, [data-theme="dark"] .pmodal-md h4, [data-theme="dark"] .pmodal-md h5, [data-theme="dark"] .pmodal-md h6, :root.theme-dark .pmodal-md h1, :root.theme-dark .pmodal-md h2, :root.theme-dark .pmodal-md h3, :root.theme-dark .pmodal-md h4, :root.theme-dark .pmodal-md h5, :root.theme-dark .pmodal-md h6{ color: var(--ink-50); }
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .pmodal-md{ color: var(--ink-200); } :root:not([data-theme="light"]) .pmodal-md h1, :root:not([data-theme="light"]) .pmodal-md h2, :root:not([data-theme="light"]) .pmodal-md h3, :root:not([data-theme="light"]) .pmodal-md h4, :root:not([data-theme="light"]) .pmodal-md h5, :root:not([data-theme="light"]) .pmodal-md h6{ color: var(--ink-50); } }
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .pmodal-md code{ background: rgba(184,212,197,0.08); color: var(--ink-100); } :root:not([data-theme="light"]) .pmodal-md blockquote{ background: rgba(184,212,197,0.06); color: var(--ink-300); } :root:not([data-theme="light"]) .pmodal-md pre{ background: rgba(184,212,197,0.04); } :root:not([data-theme="light"]) .pmodal-md-tablewrap th, :root:not([data-theme="light"]) .pmodal-md-tablewrap td{ border-color: rgba(184,212,197,0.1); } :root:not([data-theme="light"]) .pmodal-md-tablewrap th{ background: rgba(184,212,197,0.06); } }
+[data-theme="dark"] .pmodal-md code, [data-theme="dark"] .pmodal-md blockquote, [data-theme="dark"] .pmodal-md pre, :root.theme-dark .pmodal-md code, :root.theme-dark .pmodal-md blockquote, :root.theme-dark .pmodal-md pre{ background: rgba(184,212,197,0.06); color: var(--ink-100); }
+[data-theme="dark"] .pmodal-md-tablewrap th, [data-theme="dark"] .pmodal-md-tablewrap td, :root.theme-dark .pmodal-md-tablewrap th, :root.theme-dark .pmodal-md-tablewrap td{ border-color: rgba(184,212,197,0.1); }
+
+/* Prism syntax highlighting — inline so we don't depend on a CSS file load
+   for the read. Theme derived from the bundled prism.css; tokens are scoped
+   to .pmodal-code to avoid leaking into the markdown body. */
+.pmodal-code .token.comment, .pmodal-code .token.prolog, .pmodal-code .token.doctype, .pmodal-code .token.cdata{ color: #6a7d70; font-style: italic; }
+.pmodal-code .token.punctuation{ color: #4a5c52; }
+.pmodal-code .token.property, .pmodal-code .token.tag, .pmodal-code .token.boolean, .pmodal-code .token.number, .pmodal-code .token.constant, .pmodal-code .token.symbol, .pmodal-code .token.deleted{ color: #b4583d; }
+.pmodal-code .token.selector, .pmodal-code .token.attr-name, .pmodal-code .token.string, .pmodal-code .token.char, .pmodal-code .token.builtin, .pmodal-code .token.inserted{ color: #6a8c3b; }
+.pmodal-code .token.operator, .pmodal-code .token.entity, .pmodal-code .token.url, .pmodal-code .token.variable{ color: #4a7d8c; }
+.pmodal-code .token.atrule, .pmodal-code .token.attr-value, .pmodal-code .token.function, .pmodal-code .token.class-name{ color: #a86b1f; }
+.pmodal-code .token.keyword{ color: #2a5c7a; font-weight: 500; }
+.pmodal-code .token.regex, .pmodal-code .token.important{ color: #b4583d; }
+[data-theme="dark"] .pmodal-code .token.comment, :root.theme-dark .pmodal-code .token.comment, [data-theme="dark"] .pmodal-code .token.prolog, :root.theme-dark .pmodal-code .token.prolog{ color: #8aa39a; }
+[data-theme="dark"] .pmodal-code .token.punctuation, :root.theme-dark .pmodal-code .token.punctuation{ color: #c8d4cc; }
+[data-theme="dark"] .pmodal-code .token.property, [data-theme="dark"] .pmodal-code .token.tag, [data-theme="dark"] .pmodal-code .token.boolean, [data-theme="dark"] .pmodal-code .token.number, [data-theme="dark"] .pmodal-code .token.constant, [data-theme="dark"] .pmodal-code .token.symbol, [data-theme="dark"] .pmodal-code .token.deleted, :root.theme-dark .pmodal-code .token.property, :root.theme-dark .pmodal-code .token.tag, :root.theme-dark .pmodal-code .token.boolean, :root.theme-dark .pmodal-code .token.number, :root.theme-dark .pmodal-code .token.constant, :root.theme-dark .pmodal-code .token.symbol, :root.theme-dark .pmodal-code .token.deleted{ color: #d49a85; }
+[data-theme="dark"] .pmodal-code .token.selector, [data-theme="dark"] .pmodal-code .token.attr-name, [data-theme="dark"] .pmodal-code .token.string, [data-theme="dark"] .pmodal-code .token.char, [data-theme="dark"] .pmodal-code .token.builtin, [data-theme="dark"] .pmodal-code .token.inserted, :root.theme-dark .pmodal-code .token.selector, :root.theme-dark .pmodal-code .token.attr-name, :root.theme-dark .pmodal-code .token.string, :root.theme-dark .pmodal-code .token.char, :root.theme-dark .pmodal-code .token.builtin, :root.theme-dark .pmodal-code .token.inserted{ color: #b8c97a; }
+[data-theme="dark"] .pmodal-code .token.operator, [data-theme="dark"] .pmodal-code .token.entity, [data-theme="dark"] .pmodal-code .token.url, [data-theme="dark"] .pmodal-code .token.variable, :root.theme-dark .pmodal-code .token.operator, :root.theme-dark .pmodal-code .token.entity, :root.theme-dark .pmodal-code .token.url, :root.theme-dark .pmodal-code .token.variable{ color: #8ab8c4; }
+[data-theme="dark"] .pmodal-code .token.atrule, [data-theme="dark"] .pmodal-code .token.attr-value, [data-theme="dark"] .pmodal-code .token.function, [data-theme="dark"] .pmodal-code .token.class-name, :root.theme-dark .pmodal-code .token.atrule, :root.theme-dark .pmodal-code .token.attr-value, :root.theme-dark .pmodal-code .token.function, :root.theme-dark .pmodal-code .token.class-name{ color: #d4a874; }
+[data-theme="dark"] .pmodal-code .token.keyword, :root.theme-dark .pmodal-code .token.keyword{ color: #8ab8d4; }
+
+/* Loading / error states */
+.pmodal-state{ display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 48px 24px; gap: 12px; color: var(--ink-500); font-family: var(--font-mono); font-size: 13px; text-align: center; }
+.pmodal-state svg{ width: 32px; height: 32px; opacity: 0.5; }
+.pmodal-state strong{ font-family: var(--font-display); font-size: 15px; color: var(--ink-700); font-weight: 500; }
+
+/* Spinner */
+.pmodal-spin{ width: 28px; height: 28px; border: 2px solid var(--celadon-200); border-top-color: var(--celadon-500); border-radius: 50%; animation: pmodal-rot 0.8s linear infinite; }
+@keyframes pmodal-rot{ to{ transform: rotate(360deg); } }
 
 .empty-state{ display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 80px 20px; text-align: center; color: var(--ink-500); }
 .empty-state svg{ width: 64px; height: 64px; opacity: 0.4; margin-bottom: 16px; }
@@ -670,6 +770,7 @@ a{ color: inherit; text-decoration: none; }
         <span><kbd>⌘K</kbd> 搜索</span>
         <span><kbd>↵</kbd> 打开</span>
         <span><kbd>⌫</kbd> 删除</span>
+        <span><kbd>dbl-click</kbd> 预览</span>
         <span><kbd>Esc</kbd> 关闭</span>
       </div>
     </div>
@@ -681,7 +782,7 @@ a{ color: inherit; text-decoration: none; }
   <button class="insp-close" id="inspClose" aria-label="关闭">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
   </button>
-  <div class="insp-preview" id="inspPreview"></div>
+  <div class="insp-preview" id="inspIcon"></div>
   <div>
     <div class="insp-title" id="inspTitle">—</div>
     <div class="insp-sub" id="inspSub">—</div>
@@ -705,6 +806,28 @@ a{ color: inherit; text-decoration: none; }
     <div class="ring"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17V3M5 10l7-7 7 7M5 21h14"/></svg></div>
     <h3 id="dropzoneHeading">松手即上传</h3>
     <p id="dropHint">支持多文件 · 上限 2 GB</p>
+  </div>
+</div>
+
+<div class="pmodal" id="pmodal" role="dialog" aria-modal="true" aria-labelledby="pmodalTitle" aria-hidden="true">
+  <div class="pmodal-back" id="pmodalBack"></div>
+  <div class="pmodal-box">
+    <div class="pmodal-head">
+      <span class="pmodal-title" id="pmodalTitle">—</span>
+      <span class="pmodal-meta" id="pmodalMeta"></span>
+      <button class="pmodal-btn" id="pmodalCopy" title="复制内容" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        复制
+      </button>
+      <a class="pmodal-btn" id="pmodalDownload" title="下载原文件" download>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v14M5 10l7 7 7-7M5 21h14"/></svg>
+        下载
+      </a>
+      <button class="pmodal-btn pmodal-close" id="pmodalClose" aria-label="关闭" title="关闭 (Esc)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="pmodal-body" id="pmodalBody"></div>
   </div>
 </div>
 
@@ -937,7 +1060,7 @@ a{ color: inherit; text-decoration: none; }
     document.getElementById('inspSub').textContent =
       (isDir ? '文件夹' : (entry.ext || entry.kind || '文件').toLowerCase()) +
       (entry.mtime ? ' · 修改于 ' + fmtTime(entry.mtime) : '');
-    const prev = document.getElementById('inspPreview');
+    const prev = document.getElementById('inspIcon');
     prev.innerHTML = iconForKind(isDir ? 'folder' : entry.kind, entry.name);
     const acts = document.getElementById('inspActions');
     if (isDir) {
@@ -946,8 +1069,21 @@ a{ color: inherit; text-decoration: none; }
       document.getElementById('inspOpen').onclick = function(){ go(entry.href); };
       if (!readOnly) document.getElementById('inspDelete').onclick = function(){ del(entry); };
     } else {
-      acts.innerHTML = '<button class="primary" id="inspDownload">下载</button>' +
+      // Preview button appears first when the kind is previewable — it's the
+      // primary action for code/text/image/video files. Download stays one
+      // tap away for users who still want the raw file.
+      const previewBtn = isPreviewable(entry.kind)
+        ? '<button class="primary" id="inspPreview">预览</button>' : '';
+      acts.innerHTML = previewBtn +
+        '<button class="' + (previewBtn ? '' : 'primary ') + 'secondary" id="inspDownload">下载</button>' +
         (readOnly ? '' : '<button class="danger" id="inspDelete">删除</button>');
+      const pb = document.getElementById('inspPreview');
+      if (pb) {
+        pb.onclick = function(){
+          const tile = document.querySelector('.tile.selected, .row.selected');
+          if (tile) openPreview(tile);
+        };
+      }
       document.getElementById('inspDownload').onclick = function(){ download(entry); };
       if (!readOnly) document.getElementById('inspDelete').onclick = function(){ del(entry); };
     }
@@ -959,7 +1095,9 @@ a{ color: inherit; text-decoration: none; }
       ['路径', path === '/' ? '/' + entry.name : path + '/' + entry.name]
     ];
     attrs.innerHTML = rows.map(function(r){ return '<dt>' + esc(r[0]) + '</dt><dd>' + esc(r[1]) + '</dd>'; }).join('');
-    const link = window.location.origin + entry.href + (entry.kind === 'folder' && !entry.href.endsWith('/') ? '/' : '');
+    const prefix = path.endsWith('/') ? path : path + '/';
+    const link = window.location.origin + prefix + entry.href +
+      (entry.kind === 'folder' && !entry.href.endsWith('/') ? '/' : '');
     document.getElementById('shareLinkUrl').textContent = link;
     inspector.classList.add('open');
     inspector.setAttribute('aria-hidden', 'false');
@@ -970,6 +1108,355 @@ a{ color: inherit; text-decoration: none; }
   }
   inspClose.addEventListener('click', hideInspector);
 
+  // ---------- 文件预览 Modal ----------
+  // Kinds the modal can render. 'code' and 'doc' both go through the text view
+  // (no syntax highlighting — kept self-contained; viewer.html would otherwise
+  // need to inline Prism ~80 KB or fetch from a CDN, breaking the offline story).
+  const PREVIEWABLE = { code: 'text', doc: 'text', img: 'image', video: 'video' };
+  function isPreviewable(kind) { return Object.prototype.hasOwnProperty.call(PREVIEWABLE, kind); }
+
+  const pmodal = document.getElementById('pmodal');
+  const pmodalBody = document.getElementById('pmodalBody');
+  const pmodalTitle = document.getElementById('pmodalTitle');
+  const pmodalMeta = document.getElementById('pmodalMeta');
+  const pmodalDownload = document.getElementById('pmodalDownload');
+  const pmodalCopy = document.getElementById('pmodalCopy');
+  const pmodalClose = document.getElementById('pmodalClose');
+  const pmodalBack = document.getElementById('pmodalBack');
+  let pmodalState = { kind: null, url: null, text: '' };
+
+  function openPreview(tileOrRow) {
+    const name = tileOrRow.getAttribute('data-name');
+    const kind = tileOrRow.getAttribute('data-kind');
+    const href = tileOrRow.getAttribute('data-href');
+    // Resolve relative to the current page so the preview fetch hits the
+    // same directory we're browsing — using `origin` would strip the path.
+    const url = new URL(href, window.location.href).toString();
+    const entry = (DATA.entries || []).find(function(e){ return e.name === name; });
+    const sizeStr = entry && entry.size != null ? fmtSize(entry.size) : '';
+    const ext = entry && entry.ext ? entry.ext.toUpperCase() : (kind || '').toUpperCase();
+
+    pmodalTitle.textContent = name;
+    pmodalMeta.textContent = [ext, sizeStr].filter(Boolean).join(' · ');
+    pmodalDownload.href = url;
+    pmodalDownload.setAttribute('download', name);
+    pmodalState = { kind: PREVIEWABLE[kind], url, text: '' };
+
+    if (PREVIEWABLE[kind] === 'image') {
+      renderImagePreview(url, name);
+    } else if (PREVIEWABLE[kind] === 'video') {
+      renderVideoPreview(url, name);
+    } else {
+      loadTextPreview(url, name);
+    }
+
+    pmodal.classList.add('open');
+    pmodal.setAttribute('aria-hidden', 'false');
+    requestAnimationFrame(function(){ pmodalClose.focus(); });
+  }
+
+  function closePreview() {
+    pmodal.classList.remove('open');
+    pmodal.setAttribute('aria-hidden', 'true');
+    pmodalBody.innerHTML = '';
+    pmodalState = { kind: null, url: null, text: '' };
+  }
+
+  pmodalClose.addEventListener('click', closePreview);
+  pmodalBack.addEventListener('click', closePreview);
+
+  function renderState(html) {
+    pmodalBody.innerHTML = '<div class="pmodal-state">' + html + '</div>';
+  }
+
+  function renderImagePreview(url, name) {
+    pmodalCopy.hidden = true;
+    pmodalBody.innerHTML =
+      '<figure class="pmodal-image">' +
+        '<img src="' + esc(url) + '" alt="' + esc(name) + '">' +
+        '<figcaption>' + esc(name) + '</figcaption>' +
+      '</figure>';
+    const img = pmodalBody.querySelector('img');
+    img.addEventListener('error', function(){
+      renderState('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg><strong>图片加载失败</strong><span>文件可能已损坏或格式不受支持</span>');
+    });
+  }
+
+  function renderVideoPreview(url, name) {
+    pmodalCopy.hidden = true;
+    pmodalBody.innerHTML =
+      '<div class="pmodal-video">' +
+        '<video controls preload="metadata" src="' + esc(url) + '"></video>' +
+        '<span style="font-family:var(--font-mono); font-size:11px; color:var(--ink-500)">' + esc(name) + '</span>' +
+      '</div>';
+    const v = pmodalBody.querySelector('video');
+    v.addEventListener('error', function(){
+      renderState('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg><strong>视频加载失败</strong><span>文件可能已损坏或编解码器不受支持</span>');
+    });
+  }
+
+  const TEXT_MAX_BYTES = 2 * 1024 * 1024;
+
+  // ----- Syntax highlighting + Markdown rendering (lazy-loaded) -----
+  // The page boots ~140KB lighter by deferring Prism (83KB) and marked (39KB)
+  // until the first text preview is requested. The server bundles them at
+  // /_static/prism.js, /_static/marked.js, /_static/prism.css with a long
+  // max-age so subsequent previews hit the browser cache.
+  let syntaxLoadPromise = null;
+  function loadSyntaxAssets() {
+    if (typeof window.Prism === 'object' && window.Prism && typeof window.Prism.highlight === 'function' && typeof window.marked === 'object' && typeof window.marked.parse === 'function') {
+      return Promise.resolve();
+    }
+    if (syntaxLoadPromise) return syntaxLoadPromise;
+    syntaxLoadPromise = new Promise(function(resolve, reject){
+      let pending = 3;
+      let failed = false;
+      function done(err){
+        if (err && !failed) { failed = true; reject(err); }
+        if (--pending === 0 && !failed) resolve();
+      }
+      if (!document.getElementById('_static-prism-css')) {
+        const link = document.createElement('link');
+        link.id = '_static-prism-css';
+        link.rel = 'stylesheet';
+        link.href = '/_static/prism.css';
+        link.onload = function(){ done(); };
+        link.onerror = function(){ done(new Error('prism.css')); };
+        document.head.appendChild(link);
+      } else { done(); }
+      if (!document.getElementById('_static-prism-js')) {
+        const s1 = document.createElement('script');
+        s1.id = '_static-prism-js';
+        s1.src = '/_static/prism.js';
+        s1.async = false;
+        s1.onload = function(){ done(); };
+        s1.onerror = function(){ done(new Error('prism.js')); };
+        document.head.appendChild(s1);
+      } else { done(); }
+      if (!document.getElementById('_static-marked-js')) {
+        const s2 = document.createElement('script');
+        s2.id = '_static-marked-js';
+        s2.src = '/_static/marked.js';
+        s2.async = false;
+        s2.onload = function(){ done(); };
+        s2.onerror = function(){ done(new Error('marked.js')); };
+        document.head.appendChild(s2);
+      } else { done(); }
+    }).catch(function(err){
+      syntaxLoadPromise = null;
+      throw err;
+    });
+    return syntaxLoadPromise;
+  }
+
+  const LANG_BY_EXT = {
+    'c': 'c', 'h': 'c',
+    'cpp': 'cpp', 'cxx': 'cpp', 'cc': 'cpp', 'hpp': 'cpp', 'hh': 'cpp',
+    'css': 'css', 'scss': 'css', 'less': 'css',
+    'html': 'markup', 'htm': 'markup', 'xml': 'markup', 'svg': 'markup', 'vue': 'markup', 'svelte': 'markup',
+    'js': 'javascript', 'mjs': 'javascript', 'cjs': 'javascript', 'jsx': 'jsx',
+    'ts': 'typescript', 'tsx': 'tsx',
+    'py': 'python', 'rs': 'rust', 'go': 'go',
+    'java': 'java', 'kt': 'kotlin', 'scala': 'scala',
+    'rb': 'ruby', 'pl': 'perl', 'php': 'php',
+    'sh': 'bash', 'bash': 'bash', 'zsh': 'bash',
+    'json': 'json', 'json5': 'json', 'jsonc': 'json',
+    'yaml': 'yaml', 'yml': 'yaml', 'toml': 'toml',
+    'sql': 'sql', 'graphql': 'graphql', 'gql': 'graphql',
+    'dockerfile': 'dockerfile', 'ini': 'ini', 'cfg': 'ini', 'conf': 'ini',
+    'properties': 'properties', 'proto': 'protobuf',
+    'lua': 'lua', 'swift': 'swift', 'r': 'r',
+    'vim': 'vim', 'diff': 'diff', 'patch': 'diff',
+    'makefile': 'makefile', 'mk': 'makefile',
+    'md': 'markdown', 'markdown': 'markdown',
+    'log': 'plaintext', 'txt': 'plaintext', 'csv': 'plaintext',
+  };
+
+  function extOf(name) {
+    const m = /\.([a-z0-9]+)(?:\?|#|$)/i.exec(name || '');
+    return m ? m[1].toLowerCase() : '';
+  }
+  function isMarkdownName(name) {
+    const e = extOf(name);
+    return e === 'md' || e === 'markdown';
+  }
+  function langFor(name) {
+    const e = extOf(name);
+    return LANG_BY_EXT[e] || 'plaintext';
+  }
+
+  // Rebalance <span> tags that cross line boundaries so each line can be
+  // rendered independently with its own line number, without breaking the
+  // tokenisation Prism produces for the whole document.
+  function splitHighlightedLines(html) {
+    const parts = html.split('\n');
+    const result = [];
+    let carry = '';
+    for (let i = 0; i < parts.length; i++) {
+      const line = carry + parts[i];
+      const opens = (line.match(/<span[^>]*>/g) || []).length;
+      const closes = (line.match(/<\/span>/g) || []).length;
+      const unclosed = opens - closes;
+      if (unclosed > 0) {
+        result.push(line + '</span>'.repeat(unclosed));
+        const allOpens = line.match(/<span[^>]*>/g) || [];
+        carry = allOpens.slice(-unclosed).join('');
+      } else {
+        result.push(line);
+        carry = '';
+      }
+    }
+    return result;
+  }
+
+  function loadTextPreview(url, name) {
+    pmodalCopy.hidden = true;
+    renderState('<div class="pmodal-spin"></div><span>正在加载…</span>');
+    fetch(url, { headers: { 'Range': 'bytes=0-' + TEXT_MAX_BYTES } })
+      .then(function(res){
+        if (res.status === 206) {
+          const cr = res.headers.get('content-range');
+          if (cr) {
+            const m = /\/(\d+)$/.exec(cr);
+            if (m && parseInt(m[1], 10) > TEXT_MAX_BYTES) {
+              throw new Error('too-large');
+            }
+          }
+          return res.text().then(function(t){ return { text: t, truncated: false }; });
+        }
+        if (res.ok) {
+          return res.text().then(function(t){
+            if (t.length > TEXT_MAX_BYTES) throw new Error('too-large');
+            return { text: t, truncated: false };
+          });
+        }
+        throw new Error('http ' + res.status);
+      })
+      .then(function(r){
+        // Show plain text immediately (sub-50ms) and upgrade to highlighted
+        // rendering once Prism/marked finish loading. Subsequent previews
+        // skip the wait because the assets are now cached.
+        pmodalState.url = url;
+        renderTextPreview(r.text, name, false);
+        loadSyntaxAssets().then(function(){
+          if (pmodalState && pmodalState.url === url) {
+            renderTextPreview(r.text, name, true);
+          }
+        }).catch(function(){
+          /* assets unavailable — plain text is already on screen */
+        });
+      })
+      .catch(function(err){
+        if (err && err.message === 'too-large') {
+          renderState('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><strong>文件过大，无法预览</strong><span>文本预览上限 2 MB，请使用「下载」按钮获取原文件</span>');
+        } else {
+          renderState('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg><strong>加载失败</strong><span>' + esc((err && err.message) || '网络错误') + '</span>');
+        }
+      });
+  }
+
+  function renderTextPreview(text, name, highlighted) {
+    pmodalState.text = text;
+
+    if (isMarkdownName(name) && highlighted && typeof window.marked === 'object' && typeof window.marked.parse === 'function') {
+      // Render as reading view: marked → HTML, then Prism on every fenced
+      // <pre><code class="language-xxx"> block, with horizontal scroll
+      // wrappers on tables for narrow viewports.
+      const container = document.createElement('div');
+      container.className = 'pmodal-md';
+      try {
+        window.marked.setOptions({ gfm: true, breaks: false });
+        container.innerHTML = window.marked.parse(text);
+      } catch (e) {
+        container.textContent = text;
+        pmodalBody.innerHTML = '';
+        pmodalBody.appendChild(container);
+        pmodalCopy.hidden = !text;
+        return;
+      }
+      container.querySelectorAll('table').forEach(function(t){
+        const wrap = document.createElement('div');
+        wrap.className = 'pmodal-md-tablewrap';
+        t.parentNode.insertBefore(wrap, t);
+        wrap.appendChild(t);
+      });
+      if (window.Prism && typeof window.Prism.highlight === 'function') {
+        container.querySelectorAll('pre code').forEach(function(code){
+          const cls = code.className || '';
+          const m = /language-(\S+)/.exec(cls);
+          if (!m) return;
+          const lang = m[1];
+          const grammar = window.Prism.languages[lang];
+          if (!grammar) return;
+          const src = code.textContent;
+          const html = window.Prism.highlight(src, grammar, lang);
+          code.innerHTML = html;
+          code.className = 'language-' + lang;
+        });
+      }
+      pmodalBody.innerHTML = '';
+      pmodalBody.appendChild(container);
+      pmodalCopy.hidden = !text;
+      return;
+    }
+
+    if (highlighted && typeof window.Prism === 'object' && window.Prism && typeof window.Prism.highlight === 'function') {
+      const lang = langFor(name);
+      let html;
+      if (lang && lang !== 'plaintext' && window.Prism.languages[lang]) {
+        try { html = window.Prism.highlight(text, window.Prism.languages[lang], lang); }
+        catch (_) { html = null; }
+      }
+      if (html) {
+        const lines = splitHighlightedLines(html);
+        let gutterHtml = '';
+        let codeHtml = '';
+        for (let i = 0; i < lines.length; i++) {
+          gutterHtml += '<span>' + (i + 1) + '</span>';
+          codeHtml += lines[i] + '\n';
+        }
+        pmodalBody.innerHTML =
+          '<div class="pmodal-text">' +
+            '<div class="pmodal-gutter" aria-hidden="true">' + gutterHtml + '</div>' +
+            '<pre class="pmodal-code language-' + lang + '">' + codeHtml + '</pre>' +
+          '</div>';
+        pmodalCopy.hidden = !text;
+        return;
+      }
+    }
+
+    pmodalState.text = text;
+    pmodalCopy.hidden = !text;
+    const lines = text.split('\n');
+    const last = lines.length - 1;
+    let gutterHtml = '';
+    let codeHtml = '';
+    for (let i = 0; i < lines.length; i++) {
+      gutterHtml += '<span>' + (i + 1) + '</span>';
+      const line = i === last && lines[i] === '' ? ' ' : esc(lines[i]);
+      codeHtml += line + '\n';
+    }
+    pmodalBody.innerHTML =
+      '<div class="pmodal-text">' +
+        '<div class="pmodal-gutter" aria-hidden="true">' + gutterHtml + '</div>' +
+        '<pre class="pmodal-code">' + codeHtml + '</pre>' +
+      '</div>';
+  }
+
+  pmodalCopy.addEventListener('click', function(){
+    if (!pmodalState.text) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(pmodalState.text).then(function(){ toast('内容已复制'); }).catch(function(){ toast('复制失败'); });
+    } else {
+      const ta = document.createElement('textarea');
+      ta.value = pmodalState.text;
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); toast('内容已复制'); } catch (_) { toast('复制失败'); }
+      document.body.removeChild(ta);
+    }
+  });
+
   function bindTileEvents() {
     document.querySelectorAll('.tile').forEach(function(t){
       t.addEventListener('click', function(e){
@@ -978,8 +1465,10 @@ a{ color: inherit; text-decoration: none; }
       });
       t.addEventListener('dblclick', function(){
         const h = t.getAttribute('data-href');
-        if (t.getAttribute('data-kind') === 'folder') go(h);
-        else download({ name: t.getAttribute('data-name'), href: h });
+        const k = t.getAttribute('data-kind');
+        if (k === 'folder') { go(h); return; }
+        if (isPreviewable(k)) { openPreview(t); return; }
+        download({ name: t.getAttribute('data-name'), href: h });
       });
       const enter = t.querySelector('.enter');
       if (enter) enter.addEventListener('click', function(e){ e.stopPropagation(); go(t.getAttribute('data-href')); });
@@ -1001,8 +1490,10 @@ a{ color: inherit; text-decoration: none; }
       });
       r.addEventListener('dblclick', function(){
         const h = r.getAttribute('data-href');
-        if (r.getAttribute('data-kind') === 'folder') go(h);
-        else download({ name: r.getAttribute('data-name'), href: h });
+        const k = r.getAttribute('data-kind');
+        if (k === 'folder') { go(h); return; }
+        if (isPreviewable(k)) { openPreview(r); return; }
+        download({ name: r.getAttribute('data-name'), href: h });
       });
     });
   }
@@ -1024,13 +1515,17 @@ a{ color: inherit; text-decoration: none; }
 
   // ---------- 导航 ----------
   function go(href) {
-    const u = new URL(href, window.location.origin);
+    // Resolve against the current page URL, not just the origin — the
+    // server emits relative hrefs (e.g. "rs-f4ss-cli/") for every entry, so
+    // using `origin` would strip the current path and send the user to the
+    // wrong place. Falls back to origin for absolute URLs.
+    const u = new URL(href, window.location.href);
     if (!u.searchParams.has('view')) u.searchParams.set('view', 'ui');
     window.location.href = u.toString();
   }
   function download(entry) {
     if (!entry.href) return;
-    const u = new URL(entry.href, window.location.origin);
+    const u = new URL(entry.href, window.location.href);
     window.location.href = u.toString();
   }
 
@@ -1077,7 +1572,7 @@ a{ color: inherit; text-decoration: none; }
   async function del(entry) {
     if (readOnly) return;
     if (!confirm('确认删除 "' + entry.name + '"?' + (entry.kind === 'folder' ? '\n目录及其内容将一并删除。' : ''))) return;
-    const u = new URL(entry.href, window.location.origin);
+    const u = new URL(entry.href, window.location.href);
     let res;
     try {
       res = await fetch(u.toString(), { method: 'DELETE' });
@@ -1187,6 +1682,12 @@ a{ color: inherit; text-decoration: none; }
   // ---------- 键盘 ----------
   document.addEventListener('keydown', function(e){
     if (e.key === 'Escape') {
+      // Preview modal takes priority over dropzone and inspector — once
+      // a file is open the user is most likely trying to dismiss it.
+      if (pmodal.classList.contains('open')) {
+        closePreview();
+        return;
+      }
       // Dropzone (open via drag-enter) takes priority over inspector —
       // a stale drag overlay is more annoying to dismiss than a side panel.
       if (dz.classList.contains('show')) {

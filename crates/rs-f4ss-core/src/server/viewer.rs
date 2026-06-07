@@ -74,10 +74,7 @@ pub(crate) fn wants_viewer(headers: &axum::http::HeaderMap, query: Option<&str>)
             let mut rejected = false;
             for param in parts {
                 let p = param.trim();
-                if let Some(q_str) = p
-                    .strip_prefix("q=")
-                    .or_else(|| p.strip_prefix("Q="))
-                {
+                if let Some(q_str) = p.strip_prefix("q=").or_else(|| p.strip_prefix("Q=")) {
                     if let Ok(q) = q_str.trim().parse::<f32>() {
                         if q == 0.0 {
                             rejected = true;
@@ -108,9 +105,10 @@ pub(crate) fn render_viewer_html(
         read_only: state.read_only,
         entries: views,
     };
-    let json = serde_json::to_string(&data)
-        .expect("EntryView is serializable (String/&'static str/u64 only); \
-                 this expect trips if a non-serializable field is added");
+    let json = serde_json::to_string(&data).expect(
+        "EntryView is serializable (String/&'static str/u64 only); \
+                 this expect trips if a non-serializable field is added",
+    );
     // XSS guard: prevent any embedded </script> in the JSON from breaking out.
     let safe = json.replace("</", "<\\/");
     VIEWER_HTML.replace(
@@ -563,8 +561,10 @@ mod tests {
     #[test]
     fn test_format_iso8601_known() {
         // 1749103800 → 2025-06-05T06:10:00Z
-        assert_eq!(format_iso8601(UNIX_EPOCH + Duration::from_secs(1749103800)),
-                   "2025-06-05T06:10:00Z");
+        assert_eq!(
+            format_iso8601(UNIX_EPOCH + Duration::from_secs(1749103800)),
+            "2025-06-05T06:10:00Z"
+        );
     }
 
     #[test]
@@ -577,10 +577,13 @@ mod tests {
     #[test]
     fn test_url_query_pairs_basic() {
         let pairs: Vec<_> = url_query_pairs("a=1&b=2&c").collect();
-        assert_eq!(pairs, vec![
-            ("a".to_string(), "1".to_string()),
-            ("b".to_string(), "2".to_string()),
-            ("c".to_string(), "".to_string()),
-        ]);
+        assert_eq!(
+            pairs,
+            vec![
+                ("a".to_string(), "1".to_string()),
+                ("b".to_string(), "2".to_string()),
+                ("c".to_string(), "".to_string()),
+            ]
+        );
     }
 }
