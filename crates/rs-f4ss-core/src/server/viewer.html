@@ -562,6 +562,11 @@ a{ color: inherit; text-decoration: none; }
 @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .pmodal-gutter{ background: rgba(184,212,197,0.04); color: var(--ink-500); } }
 .pmodal-gutter span{ display: block; }
 .pmodal-code{ flex: 1; min-width: 0; padding: 16px 18px; white-space: pre; overflow-x: auto; tab-size: 4; }
+/* prism.css ships `pre[class*="language-"] { font-size: 0.85em; ... }` which
+   matches our highlighted <pre> with specificity (0,1,1) and shrinks the
+   text to ~11px — breaking alignment with the 13px gutter. The double-
+   class selector wins on specificity (0,2,1) and restores the 13px design. */
+.pmodal-text .pmodal-code{ font-size: 1em; line-height: 1.55; text-shadow: none; }
 .pmodal-code mark{ background: rgba(212,165,116,0.32); color: inherit; border-radius: 2px; padding: 0 1px; }
 
 /* Image view */
@@ -1124,6 +1129,13 @@ a{ color: inherit; text-decoration: none; }
   const pmodalClose = document.getElementById('pmodalClose');
   const pmodalBack = document.getElementById('pmodalBack');
   let pmodalState = { kind: null, url: null, text: '' };
+  // Remember which tile/row opened the modal so closePreview can restore
+  // focus there (WCAG 2.4.3 — focus must return to the trigger on close).
+  let pmodalReturnFocus = null;
+  // Focusable controls inside the modal head, in tab order. Cycling Tab /
+  // Shift+Tab among them is the focus trap — there are no other interactive
+  // elements in the modal that should steal focus.
+  const pmodalFocusables = [pmodalCopy, pmodalDownload, pmodalClose];
 
   function openPreview(tileOrRow) {
     const name = tileOrRow.getAttribute('data-name');
@@ -1141,6 +1153,7 @@ a{ color: inherit; text-decoration: none; }
     pmodalDownload.href = url;
     pmodalDownload.setAttribute('download', name);
     pmodalState = { kind: PREVIEWABLE[kind], url, text: '' };
+    pmodalReturnFocus = tileOrRow;
 
     if (PREVIEWABLE[kind] === 'image') {
       renderImagePreview(url, name);
@@ -1160,6 +1173,12 @@ a{ color: inherit; text-decoration: none; }
     pmodal.setAttribute('aria-hidden', 'true');
     pmodalBody.innerHTML = '';
     pmodalState = { kind: null, url: null, text: '' };
+    // Restore focus to the tile/row that opened the modal, falling back to
+    // the body if the trigger has since been removed (e.g. after delete).
+    if (pmodalReturnFocus && document.body.contains(pmodalReturnFocus)) {
+      pmodalReturnFocus.focus();
+    }
+    pmodalReturnFocus = null;
   }
 
   pmodalClose.addEventListener('click', closePreview);
@@ -1198,18 +1217,24 @@ a{ color: inherit; text-decoration: none; }
   const TEXT_MAX_BYTES = 2 * 1024 * 1024;
 
   // ----- Syntax highlighting + Markdown rendering (lazy-loaded) -----
-  // The page boots ~140KB lighter by deferring Prism (83KB) and marked (39KB)
-  // until the first text preview is requested. The server bundles them at
-  // /_static/prism.js, /_static/marked.js, /_static/prism.css with a long
-  // max-age so subsequent previews hit the browser cache.
+  // The page boots ~165KB lighter by deferring Prism (83KB), marked (39KB),
+  // and DOMPurify (22KB) until the first text preview is requested. The
+  // server bundles them at /_static/{prism,marked,purify}.{js,css} with a
+  // long max-age so subsequent previews hit the browser cache.
+  //
+  // DOMPurify is mandatory: marked v15+ does not sanitize HTML, so a
+  // malicious .md file containing `<img onerror=...>` or `<svg onload=...>`
+  // would otherwise execute JavaScript in the share origin — full access
+  // to the local file server. We sanitize with the HTML profile and then
+  // hand the result to Prism for in-code-block highlighting.
   let syntaxLoadPromise = null;
   function loadSyntaxAssets() {
-    if (typeof window.Prism === 'object' && window.Prism && typeof window.Prism.highlight === 'function' && typeof window.marked === 'object' && typeof window.marked.parse === 'function') {
+    if (typeof window.Prism === 'object' && window.Prism && typeof window.Prism.highlight === 'function' && typeof window.marked === 'object' && typeof window.marked.parse === 'function' && typeof window.DOMPurify === 'function') {
       return Promise.resolve();
     }
     if (syntaxLoadPromise) return syntaxLoadPromise;
     syntaxLoadPromise = new Promise(function(resolve, reject){
-      let pending = 3;
+      let pending = 4;
       let failed = false;
       function done(err){
         if (err && !failed) { failed = true; reject(err); }
@@ -1241,6 +1266,15 @@ a{ color: inherit; text-decoration: none; }
         s2.onload = function(){ done(); };
         s2.onerror = function(){ done(new Error('marked.js')); };
         document.head.appendChild(s2);
+      } else { done(); }
+      if (!document.getElementById('_static-purify-js')) {
+        const s3 = document.createElement('script');
+        s3.id = '_static-purify-js';
+        s3.src = '/_static/purify.min.js';
+        s3.async = false;
+        s3.onload = function(){ done(); };
+        s3.onerror = function(){ done(new Error('purify.min.js')); };
+        document.head.appendChild(s3);
       } else { done(); }
     }).catch(function(err){
       syntaxLoadPromise = null;
@@ -1359,14 +1393,21 @@ a{ color: inherit; text-decoration: none; }
     pmodalState.text = text;
 
     if (isMarkdownName(name) && highlighted && typeof window.marked === 'object' && typeof window.marked.parse === 'function') {
-      // Render as reading view: marked → HTML, then Prism on every fenced
-      // <pre><code class="language-xxx"> block, with horizontal scroll
-      // wrappers on tables for narrow viewports.
+      // Render as reading view: marked → DOMPurify → HTML, then Prism on
+      // every fenced <pre><code class="language-xxx"> block, with horizontal
+      // scroll wrappers on tables for narrow viewports. The sanitiser sits
+      // BEFORE innerHTML — marked v15+ does not strip `<script>`, event
+      // handlers, or `javascript:` URLs on its own, so we route its output
+      // through DOMPurify with the HTML profile before any sink.
       const container = document.createElement('div');
       container.className = 'pmodal-md';
       try {
         window.marked.setOptions({ gfm: true, breaks: false });
-        container.innerHTML = window.marked.parse(text);
+        const raw = window.marked.parse(text);
+        const clean = (typeof window.DOMPurify === 'function')
+          ? window.DOMPurify.sanitize(raw, { USE_PROFILES: { html: true } })
+          : raw;
+        container.innerHTML = clean;
       } catch (e) {
         container.textContent = text;
         pmodalBody.innerHTML = '';
@@ -1457,19 +1498,26 @@ a{ color: inherit; text-decoration: none; }
     }
   });
 
+  // The same action that a double-click triggers — used by the keydown
+  // handler so keyboard users can also activate folders / previews / files
+  // (the click handler in `bindTileEvents` only does `selectTile`, which
+  // means Tab + Enter would otherwise leave keyboard users stuck on
+  // selection).
+  function activateTile(t) {
+    const h = t.getAttribute('data-href');
+    const k = t.getAttribute('data-kind');
+    if (k === 'folder') { go(h); return; }
+    if (isPreviewable(k)) { openPreview(t); return; }
+    download({ name: t.getAttribute('data-name'), href: h });
+  }
+
   function bindTileEvents() {
     document.querySelectorAll('.tile').forEach(function(t){
       t.addEventListener('click', function(e){
         if (e.target.closest('.tile-actions')) return;
         selectTile(t);
       });
-      t.addEventListener('dblclick', function(){
-        const h = t.getAttribute('data-href');
-        const k = t.getAttribute('data-kind');
-        if (k === 'folder') { go(h); return; }
-        if (isPreviewable(k)) { openPreview(t); return; }
-        download({ name: t.getAttribute('data-name'), href: h });
-      });
+      t.addEventListener('dblclick', function(){ activateTile(t); });
       const enter = t.querySelector('.enter');
       if (enter) enter.addEventListener('click', function(e){ e.stopPropagation(); go(t.getAttribute('data-href')); });
       const dl = t.querySelector('.download');
@@ -1488,13 +1536,7 @@ a{ color: inherit; text-decoration: none; }
         if (e.target.closest('.ractions')) return;
         selectTile(r);
       });
-      r.addEventListener('dblclick', function(){
-        const h = r.getAttribute('data-href');
-        const k = r.getAttribute('data-kind');
-        if (k === 'folder') { go(h); return; }
-        if (isPreviewable(k)) { openPreview(r); return; }
-        download({ name: r.getAttribute('data-name'), href: h });
-      });
+      r.addEventListener('dblclick', function(){ activateTile(r); });
     });
   }
 
@@ -1707,17 +1749,45 @@ a{ color: inherit; text-decoration: none; }
       const entry = (DATA.entries || []).find(function(x){ return x.name === selected.getAttribute('data-name'); });
       if (entry) { e.preventDefault(); del(entry); }
     }
+    // Focus trap: while the modal is open, cycle Tab / Shift+Tab among the
+    // head controls so focus never escapes to the dimmed background.
+    if (pmodal.classList.contains('open') && e.key === 'Tab') {
+      const visible = pmodalFocusables.filter(function(el){ return el && !el.hidden && el.offsetParent !== null; });
+      if (visible.length === 0) return;
+      const first = visible[0];
+      const last = visible[visible.length - 1];
+      const active = document.activeElement;
+      // Anything outside the modal (or on a control we no longer consider
+      // focusable) — snap back to the head.
+      if (!pmodal.contains(active)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
   });
 
   // Per-tile / per-row keyboard activation: Enter or Space mirrors a click,
   // since <article>/<div role="button"> don't get the implicit Enter/Space
   // mapping that real <button> elements do.
+  //
+  // First press on a fresh tile mirrors single-click (selectTile). A second
+  // press on the already-selected tile mirrors double-click (activateTile) —
+  // this matches the mouse model and gives keyboard users a way to open
+  // previews / navigate folders / download files, which used to require a
+  // double-click only.
   scrollArea.addEventListener('keydown', function(e){
-    const target = e.target.closest('.tile, .row');
+    const target = e.target.closest('.tile, .row:not(.row-head)');
     if (!target) return;
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      selectTile(target);
+      if (selected === target) activateTile(target);
+      else selectTile(target);
     }
   });
 
