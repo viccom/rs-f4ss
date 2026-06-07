@@ -203,8 +203,15 @@ impl<B: StorageBackend> Filesystem for FuseAdapter<B> {
                 let result = if new_size == 0 {
                     backend.write(&path_str, &[]).await
                 } else {
-                    let read_size = new_size.min(u32::MAX as u64) as u32;
-                    match backend.read(&path_str, 0, read_size).await {
+                    let new_size_u32 = match u32::try_from(new_size) {
+                        Ok(s) => s,
+                        Err(_) => {
+                            tracing::warn!("setattr: truncating to {new_size} bytes exceeds max, rejecting");
+                            reply.error(Errno::EFBIG);
+                            return;
+                        }
+                    };
+                    match backend.read(&path_str, 0, new_size_u32).await {
                         Ok(mut data) => {
                             data.resize(new_size as usize, 0);
                             backend.write(&path_str, &data).await

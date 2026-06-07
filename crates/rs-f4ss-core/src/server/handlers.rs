@@ -70,18 +70,16 @@ async fn handle_get_dir(
 
     let etag = dir_etag(&entries);
     // Honour If-None-Match: identical listing → 304, skip body serialisation.
-    if !head_only {
-        if let Some(inm) = headers.get("if-none-match").and_then(|v| v.to_str().ok()) {
-            if inm.split(',').any(|tag| tag.trim() == etag) {
-                let mut hdrs = HeaderMap::new();
-                hdrs.insert("etag", HeaderValue::from_str(&etag).unwrap());
-                hdrs.insert("x-frame-options", HeaderValue::from_static("DENY"));
-                hdrs.insert(
-                    "x-content-type-options",
-                    HeaderValue::from_static("nosniff"),
-                );
-                return (StatusCode::NOT_MODIFIED, hdrs, Body::empty()).into_response();
-            }
+    if let Some(inm) = headers.get("if-none-match").and_then(|v| v.to_str().ok()) {
+        if inm.split(',').any(|tag| tag.trim() == etag) {
+            let mut hdrs = HeaderMap::new();
+            hdrs.insert("etag", HeaderValue::from_str(&etag).unwrap());
+            hdrs.insert("x-frame-options", HeaderValue::from_static("DENY"));
+            hdrs.insert(
+                "x-content-type-options",
+                HeaderValue::from_static("nosniff"),
+            );
+            return (StatusCode::NOT_MODIFIED, hdrs, Body::empty()).into_response();
         }
     }
 
@@ -356,8 +354,27 @@ pub async fn handle_move(
         Err(resp) => return *resp,
     };
 
+    let dest_exists = tokio::fs::symlink_metadata(&dest).await.is_ok();
+
+    // Overwrite: F → reject if destination exists
+    if dest_exists {
+        let overwrite = headers
+            .get("overwrite")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("T");
+        if overwrite.eq_ignore_ascii_case("F") {
+            return StatusCode::PRECONDITION_FAILED.into_response();
+        }
+    }
+
     match tokio::fs::rename(local_path, &dest).await {
-        Ok(()) => StatusCode::CREATED.into_response(),
+        Ok(()) => {
+            if dest_exists {
+                StatusCode::NO_CONTENT.into_response()
+            } else {
+                StatusCode::CREATED.into_response()
+            }
+        }
         Err(e) => {
             tracing::error!("move: {e}");
             if e.raw_os_error() == Some(18) {
@@ -386,6 +403,18 @@ pub async fn handle_copy(
         Err(resp) => return *resp,
     };
 
+    let dest_exists = tokio::fs::symlink_metadata(&dest).await.is_ok();
+
+    if dest_exists {
+        let overwrite = headers
+            .get("overwrite")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("T");
+        if overwrite.eq_ignore_ascii_case("F") {
+            return StatusCode::PRECONDITION_FAILED.into_response();
+        }
+    }
+
     let meta = match tokio::fs::symlink_metadata(local_path).await {
         Ok(m) => m,
         Err(e) => {
@@ -401,7 +430,13 @@ pub async fn handle_copy(
     };
 
     match result {
-        Ok(()) => StatusCode::CREATED.into_response(),
+        Ok(()) => {
+            if dest_exists {
+                StatusCode::NO_CONTENT.into_response()
+            } else {
+                StatusCode::CREATED.into_response()
+            }
+        }
         Err(e) => {
             tracing::error!("copy: {e}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -421,7 +456,7 @@ pub fn handle_options() -> Response {
             "GET,HEAD,PUT,DELETE,OPTIONS,PROPFIND,MKCOL,MOVE,COPY,LOCK,UNLOCK",
         ),
     );
-    hdrs.insert("dav", HeaderValue::from_static("1, 2"));
+    hdrs.insert("dav", HeaderValue::from_static("1"));
     (StatusCode::NO_CONTENT, hdrs, Body::empty()).into_response()
 }
 

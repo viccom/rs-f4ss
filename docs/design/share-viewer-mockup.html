@@ -1,0 +1,1308 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>rs-f4ss · 文件库 · 青瓷玻璃</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..800,0..100&family=Geist:wght@300..700&family=Geist+Mono:wght@400..600&display=swap" rel="stylesheet">
+
+<style>
+/* ──────────────────────────────────────────────────────────
+   设计 tokens — 青瓷玻璃 (Celadon Glass)
+   ────────────────────────────────────────────────────────── */
+:root{
+  /* 中性 — 象牙·墨绿 */
+  --ivory:        #F5F1E8;
+  --ivory-soft:   #FAF6EE;
+  --ink-900:      #1A2823;
+  --ink-700:      #2F4137;
+  --ink-500:      #5C6660;
+  --ink-300:      #97A39B;
+  --ink-100:      #D6DDD7;
+
+  /* 青瓷 — 主色阶 */
+  --celadon-50:   #EAF1ED;
+  --celadon-100:  #D4E2D7;
+  --celadon-200:  #B8D4C5;
+  --celadon-300:  #9CC2AE;
+  --celadon-400:  #7AA694;
+  --celadon-500:  #5E8C77;
+  --celadon-700:  #3D5B4E;
+  --celadon-900:  #1F3329;
+
+  /* 强调 — 陶土·晨曦 */
+  --terra:        #C97B5C;
+  --terra-soft:   #E8B8A0;
+  --gold:         #D4A574;
+  --rust:         #A85A3F;
+
+  /* 文件类型色 */
+  --type-doc:    #4A6B8A;
+  --type-pdf:    #C04A35;
+  --type-img:    #7AA694;
+  --type-zip:    #C97B5C;
+  --type-code:   #5C7A5C;
+  --type-audio:  #8B6FAA;
+  --type-video:  #8A4A6B;
+  --type-folder: #D4A574;
+
+  /* 玻璃 */
+  --mist:          rgba(255,255,255,0.55);
+  --mist-soft:     rgba(255,255,255,0.32);
+  --mist-strong:   rgba(255,255,255,0.78);
+  --mist-edge:     rgba(255,255,255,0.55);
+  --mist-shade:    rgba(31,51,41,0.06);
+
+  /* 阴影 — 多层柔和 */
+  --shadow-rest:   0 1px 2px rgba(31,51,41,0.04), 0 4px 16px -6px rgba(31,51,41,0.08);
+  --shadow-soft:   0 2px 8px rgba(31,51,41,0.06), 0 12px 28px -12px rgba(31,51,41,0.14);
+  --shadow-lift:   0 4px 12px rgba(31,51,41,0.08), 0 24px 48px -16px rgba(31,51,41,0.22), 0 0 0 1px rgba(255,255,255,0.6) inset;
+  --shadow-deep:   0 8px 24px rgba(31,51,41,0.10), 0 48px 96px -24px rgba(31,51,41,0.30);
+
+  /* 排印 */
+  --font-display: 'Fraunces', ui-serif, Georgia, 'Songti SC', serif;
+  --font-body:    'Geist', ui-sans-serif, system-ui, -apple-system, 'Helvetica Neue', sans-serif;
+  --font-mono:    'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* 几何 */
+  --radius-xs: 8px;
+  --radius-sm: 12px;
+  --radius-md: 18px;
+  --radius-lg: 24px;
+  --radius-xl: 32px;
+  --radius-pill: 999px;
+
+  /* 节奏 */
+  --ease-spring:  cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-out:     cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out:  cubic-bezier(0.65, 0, 0.35, 1);
+}
+
+/* ──────────────────────────────────────────────────────────
+   基础
+   ────────────────────────────────────────────────────────── */
+*,*::before,*::after{ box-sizing: border-box; margin:0; padding:0; }
+html,body{ height:100%; }
+body{
+  font-family: var(--font-body);
+  font-weight: 400;
+  color: var(--ink-900);
+  background: var(--ivory);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+  font-feature-settings: "ss01", "cv11";
+}
+button{ font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+a{ color: inherit; text-decoration: none; }
+::selection{ background: var(--celadon-300); color: var(--celadon-900); }
+
+/* 背景:mesh + 噪点 + 微微浮动 */
+.stage{
+  position: fixed; inset: 0; z-index: -2;
+  background:
+    radial-gradient(at 15% 18%, var(--celadon-100) 0px, transparent 38%),
+    radial-gradient(at 82% 22%, var(--terra-soft) 0px, transparent 42%),
+    radial-gradient(at 50% 78%, var(--celadon-200) 0px, transparent 55%),
+    radial-gradient(at 90% 92%, var(--gold) 0px, transparent 38%),
+    radial-gradient(at 6% 86%, var(--celadon-300) 0px, transparent 36%),
+    var(--ivory);
+  animation: stageDrift 28s var(--ease-in-out) infinite alternate;
+}
+@keyframes stageDrift{
+  0%   { background-position: 0% 0%, 0% 0%, 0% 0%, 0% 0%, 0% 0%, 0 0; }
+  100% { background-position: 6% -4%, -3% 6%, 4% 2%, -5% -3%, 3% 5%, 0 0; }
+}
+.grain{
+  position: fixed; inset: -200%; z-index: -1; pointer-events: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.86' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.1 0 0 0 0 0.18 0 0 0 0 0.14 0 0 0 0.6 0'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.6'/></svg>");
+  opacity: 0.10;
+  mix-blend-mode: multiply;
+}
+
+/* ──────────────────────────────────────────────────────────
+   布局骨架
+   ────────────────────────────────────────────────────────── */
+.shell{
+  display: grid;
+  grid-template-columns: 268px 1fr;
+  grid-template-rows: 72px 1fr;
+  height: 100vh;
+  gap: 18px;
+  padding: 18px;
+}
+.topbar{ grid-column: 1 / -1; grid-row: 1; }
+.sidebar{ grid-column: 1; grid-row: 2; }
+.workspace{ grid-column: 2; grid-row: 2; overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+
+/* 玻璃面板基类 */
+.glass{
+  background: var(--mist);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid var(--mist-edge);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
+  position: relative;
+}
+.glass::before{
+  content:''; position:absolute; inset:0;
+  border-radius: inherit;
+  background: linear-gradient(140deg, rgba(255,255,255,0.55), rgba(255,255,255,0) 50%);
+  pointer-events: none;
+}
+
+/* ──────────────────────────────────────────────────────────
+   顶部 bar
+   ────────────────────────────────────────────────────────── */
+.topbar{
+  padding: 0 20px;
+  display: flex; align-items: center; gap: 18px;
+}
+.brand{
+  display: flex; align-items: center; gap: 12px;
+  padding-right: 14px;
+  border-right: 1px solid rgba(31,51,41,0.08);
+  height: 40px;
+}
+.brand .mark{
+  width: 34px; height: 34px;
+  display: grid; place-items: center;
+  border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #fff, var(--celadon-200) 70%);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.7), 0 4px 12px -2px rgba(58,82,71,0.25);
+}
+.brand .mark svg{ width: 18px; height: 18px; color: var(--celadon-700); }
+.brand .name{
+  font-family: var(--font-display);
+  font-weight: 500;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+  font-variation-settings: "opsz" 24, "SOFT" 60;
+  color: var(--ink-900);
+}
+.brand .name em{
+  font-style: italic;
+  font-variation-settings: "opsz" 24, "SOFT" 100;
+  color: var(--celadon-700);
+  font-weight: 400;
+}
+
+.search{
+  flex: 1; max-width: 520px;
+  display: flex; align-items: center; gap: 10px;
+  height: 44px; padding: 0 16px;
+  background: var(--mist-strong);
+  border: 1px solid rgba(31,51,41,0.06);
+  border-radius: var(--radius-pill);
+  box-shadow: inset 0 1px 2px rgba(31,51,41,0.04);
+  transition: border-color .25s var(--ease-out), background .25s var(--ease-out);
+}
+.search:focus-within{
+  border-color: var(--celadon-400);
+  background: #fff;
+  box-shadow: 0 0 0 4px rgba(122,166,148,0.18);
+}
+.search svg{ width:16px; height:16px; color: var(--ink-500); }
+.search input{
+  flex:1; background:none; border:0; outline:0;
+  font: 400 14px/1 var(--font-body); color: var(--ink-900);
+}
+.search input::placeholder{ color: var(--ink-500); font-style: italic; }
+.search .kbd{
+  font-family: var(--font-mono); font-size: 11px;
+  padding: 3px 7px; border-radius: 6px;
+  background: rgba(31,51,41,0.06); color: var(--ink-700);
+  border: 1px solid rgba(31,51,41,0.04);
+}
+
+.top-actions{ display:flex; align-items:center; gap: 8px; margin-left: auto; }
+.icon-btn{
+  width: 40px; height: 40px;
+  display:grid; place-items:center;
+  border-radius: var(--radius-md);
+  color: var(--ink-700);
+  transition: background .2s var(--ease-out), color .2s, transform .2s var(--ease-spring);
+}
+.icon-btn:hover{ background: rgba(255,255,255,0.75); color: var(--celadon-700); transform: translateY(-1px); }
+.icon-btn:focus-visible{ outline: 3px solid var(--celadon-300); outline-offset: 2px; }
+.icon-btn svg{ width: 18px; height: 18px; }
+.icon-btn.has-dot{ position: relative; }
+.icon-btn.has-dot::after{
+  content:''; position:absolute; top:9px; right:9px;
+  width:7px; height:7px; border-radius:50%;
+  background: var(--terra); border: 2px solid var(--ivory-soft);
+}
+
+.avatar{
+  width: 40px; height: 40px; border-radius: 50%;
+  background: conic-gradient(from 140deg, var(--terra-soft), var(--celadon-300), var(--gold), var(--terra-soft));
+  display: grid; place-items: center;
+  font-family: var(--font-display); font-weight: 600; font-size: 15px;
+  color: var(--ink-900);
+  box-shadow: inset 0 0 0 2px rgba(255,255,255,0.7), 0 2px 8px rgba(31,51,41,0.18);
+  cursor: pointer;
+}
+
+/* ──────────────────────────────────────────────────────────
+   侧栏
+   ────────────────────────────────────────────────────────── */
+.sidebar{
+  padding: 22px 18px 18px;
+  display: flex; flex-direction: column; gap: 18px;
+  overflow-y: auto;
+}
+.user-card{
+  display:flex; align-items:center; gap: 12px;
+  padding: 4px 6px 16px;
+  border-bottom: 1px solid rgba(31,51,41,0.07);
+}
+.user-card .who{ font-family: var(--font-display); font-weight: 500; font-size: 15px; letter-spacing: -.01em; font-variation-settings: "opsz" 14, "SOFT" 70; }
+.user-card .where{ font-family: var(--font-mono); font-size: 11px; color: var(--ink-500); margin-top: 2px; }
+.user-card .pulse{
+  width: 7px; height: 7px; border-radius: 50%; background: var(--celadon-400);
+  box-shadow: 0 0 0 0 rgba(122,166,148,0.6);
+  animation: pulse 2.4s var(--ease-out) infinite;
+  margin-left: auto;
+}
+@keyframes pulse{
+  0%{ box-shadow: 0 0 0 0 rgba(122,166,148,0.5); }
+  70%{ box-shadow: 0 0 0 9px rgba(122,166,148,0); }
+  100%{ box-shadow: 0 0 0 0 rgba(122,166,148,0); }
+}
+
+.nav-section{ display: flex; flex-direction: column; gap: 3px; }
+.nav-title{
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--ink-500); padding: 0 12px 6px;
+}
+.nav-item{
+  display: flex; align-items: center; gap: 12px;
+  padding: 9px 12px; border-radius: var(--radius-sm);
+  font-size: 14px; color: var(--ink-700);
+  transition: background .2s var(--ease-out), color .2s, transform .2s;
+  width: 100%; text-align: left;
+}
+.nav-item svg{ width: 16px; height: 16px; opacity: 0.78; }
+.nav-item .count{ margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--ink-500); }
+.nav-item:hover{ background: rgba(255,255,255,0.6); color: var(--ink-900); }
+.nav-item.active{
+  background: linear-gradient(120deg, var(--celadon-100), rgba(255,255,255,0.4));
+  color: var(--celadon-900);
+  box-shadow: inset 0 0 0 1px rgba(122,166,148,0.32);
+}
+.nav-item.active svg{ opacity: 1; color: var(--celadon-700); }
+
+.tag-cloud{ display: flex; flex-wrap: wrap; gap: 6px; padding: 0 8px; }
+.tag{
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px; border-radius: var(--radius-pill);
+  background: rgba(255,255,255,0.65);
+  border: 1px solid rgba(31,51,41,0.06);
+  font-size: 12px; color: var(--ink-700);
+  transition: transform .2s var(--ease-spring), background .2s;
+}
+.tag:hover{ transform: translateY(-1px); background: #fff; }
+.tag .dot{ width: 6px; height: 6px; border-radius: 50%; }
+
+.capacity{
+  margin-top: auto; padding: 16px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(155deg, rgba(255,255,255,0.7), rgba(184,212,197,0.25));
+  border: 1px solid rgba(255,255,255,0.6);
+}
+.capacity-head{ display:flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+.capacity-head .label{ font-family: var(--font-display); font-size: 13px; font-weight: 500; letter-spacing: -.01em; color: var(--ink-700); }
+.capacity-head .val{ font-family: var(--font-mono); font-size: 11px; color: var(--ink-500); }
+.capacity-bar{
+  height: 6px; border-radius: var(--radius-pill);
+  background: rgba(31,51,41,0.08); overflow: hidden;
+  position: relative;
+}
+.capacity-fill{
+  height: 100%; width: 38%;
+  background: linear-gradient(90deg, var(--celadon-400), var(--celadon-200) 70%, var(--gold));
+  border-radius: inherit;
+  position: relative;
+}
+.capacity-fill::after{
+  content:''; position: absolute; inset:0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.6), transparent);
+  animation: shimmer 3.6s linear infinite;
+}
+@keyframes shimmer{ 0%{transform: translateX(-100%);} 100%{transform: translateX(200%);} }
+.capacity-foot{ margin-top: 10px; font-family: var(--font-mono); font-size: 11px; color: var(--ink-500); }
+.capacity-foot strong{ color: var(--ink-900); font-weight: 600; }
+
+.upload-btn{
+  display:flex; align-items:center; justify-content:center; gap: 10px;
+  width: 100%; padding: 12px 16px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(140deg, var(--celadon-700), var(--celadon-500));
+  color: var(--ivory-soft);
+  font-family: var(--font-display); font-weight: 500; font-size: 14px;
+  letter-spacing: -.005em; font-variation-settings: "opsz" 14, "SOFT" 50;
+  box-shadow: 0 6px 14px -4px rgba(31,51,41,0.4), inset 0 1px 0 rgba(255,255,255,0.25);
+  transition: transform .25s var(--ease-spring), box-shadow .25s, filter .25s;
+}
+.upload-btn:hover{ transform: translateY(-2px); box-shadow: 0 12px 24px -6px rgba(31,51,41,0.4), inset 0 1px 0 rgba(255,255,255,0.3); }
+.upload-btn:active{ transform: translateY(0); filter: brightness(0.96); }
+.upload-btn svg{ width: 16px; height: 16px; }
+
+/* ──────────────────────────────────────────────────────────
+   工作区
+   ────────────────────────────────────────────────────────── */
+.workspace{
+  padding: 24px 28px 28px;
+  gap: 22px;
+}
+.work-head{ display: flex; flex-direction: column; gap: 18px; }
+.crumbs{
+  display:flex; align-items:center; gap: 6px; flex-wrap: wrap;
+  font-family: var(--font-mono); font-size: 12px; color: var(--ink-500);
+}
+.crumbs a{ padding: 4px 8px; border-radius: var(--radius-xs); transition: background .15s, color .15s; }
+.crumbs a:hover{ background: rgba(255,255,255,0.6); color: var(--ink-900); }
+.crumbs .sep{ opacity: 0.4; }
+.crumbs .here{ color: var(--ink-900); font-weight: 500; }
+
+.title-row{ display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+.page-title{
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: clamp(36px, 5vw, 56px);
+  line-height: 0.98;
+  letter-spacing: -0.035em;
+  font-variation-settings: "opsz" 72, "SOFT" 30;
+  color: var(--ink-900);
+}
+.page-title em{
+  font-style: italic;
+  font-variation-settings: "opsz" 72, "SOFT" 100;
+  color: var(--celadon-700);
+  font-weight: 300;
+}
+.page-meta{
+  font-family: var(--font-mono); font-size: 12px; color: var(--ink-500);
+  margin-top: 10px; letter-spacing: 0.02em;
+}
+.page-meta .sep{ margin: 0 8px; opacity: 0.5; }
+.page-meta strong{ color: var(--ink-900); font-weight: 600; }
+
+.view-controls{ display: flex; align-items: center; gap: 12px; }
+.sort-pill{
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 9px 14px; border-radius: var(--radius-pill);
+  background: var(--mist-strong);
+  border: 1px solid rgba(31,51,41,0.06);
+  font-size: 13px; color: var(--ink-700);
+}
+.sort-pill .lbl{ font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-500); }
+.sort-pill svg{ width: 12px; height: 12px; opacity: 0.6; }
+.view-toggle{
+  display: inline-flex; padding: 4px;
+  background: var(--mist-strong);
+  border: 1px solid rgba(31,51,41,0.06);
+  border-radius: var(--radius-pill);
+}
+.view-toggle button{
+  padding: 6px 10px; border-radius: var(--radius-pill);
+  color: var(--ink-500); transition: color .2s, background .2s;
+  display: grid; place-items: center;
+}
+.view-toggle button svg{ width: 16px; height: 16px; }
+.view-toggle button.on{
+  background: #fff; color: var(--celadon-700);
+  box-shadow: 0 2px 6px rgba(31,51,41,0.10);
+}
+
+.tab-row{
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  border-bottom: 1px solid rgba(31,51,41,0.08);
+  padding-bottom: 0;
+}
+.tab{
+  position: relative;
+  padding: 12px 16px 14px;
+  font-size: 13px; color: var(--ink-500);
+  transition: color .2s;
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.tab .num{
+  font-family: var(--font-mono); font-size: 10px;
+  padding: 2px 6px; border-radius: var(--radius-xs);
+  background: rgba(31,51,41,0.06); color: inherit;
+}
+.tab:hover{ color: var(--ink-700); }
+.tab.active{ color: var(--ink-900); font-weight: 500; }
+.tab.active::after{
+  content:''; position: absolute; left: 16px; right: 16px; bottom: -1px;
+  height: 2px; border-radius: 2px;
+  background: linear-gradient(90deg, var(--celadon-700), var(--terra));
+}
+
+/* 文件网格 */
+.scroll-area{ flex: 1; overflow-y: auto; margin: -8px -8px; padding: 8px; position: relative; }
+.scroll-area::-webkit-scrollbar{ width: 8px; }
+.scroll-area::-webkit-scrollbar-thumb{ background: rgba(31,51,41,0.18); border-radius: 4px; }
+.scroll-area::-webkit-scrollbar-thumb:hover{ background: rgba(31,51,41,0.32); }
+
+.section-label{
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--ink-500); margin: 12px 4px 14px; display: flex; align-items: center; gap: 10px;
+}
+.section-label::after{
+  content:''; flex: 1; height: 1px;
+  background: linear-gradient(90deg, rgba(31,51,41,0.12), transparent);
+}
+
+.grid{
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 16px;
+  padding: 4px;
+}
+
+/* 文件卡 */
+.tile{
+  position: relative;
+  display: flex; flex-direction: column;
+  border-radius: var(--radius-md);
+  padding: 14px 14px 16px;
+  background: var(--mist-strong);
+  border: 1px solid var(--mist-edge);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  box-shadow: var(--shadow-rest);
+  cursor: pointer;
+  transition: transform .35s var(--ease-spring), box-shadow .35s var(--ease-out), border-color .25s;
+  opacity: 0;
+  animation: tileRise .6s var(--ease-out) forwards;
+}
+.tile:nth-child(1){ animation-delay: .04s; }
+.tile:nth-child(2){ animation-delay: .08s; }
+.tile:nth-child(3){ animation-delay: .12s; }
+.tile:nth-child(4){ animation-delay: .16s; }
+.tile:nth-child(5){ animation-delay: .20s; }
+.tile:nth-child(6){ animation-delay: .24s; }
+.tile:nth-child(7){ animation-delay: .28s; }
+.tile:nth-child(8){ animation-delay: .32s; }
+.tile:nth-child(9){ animation-delay: .36s; }
+.tile:nth-child(10){ animation-delay: .40s; }
+.tile:nth-child(11){ animation-delay: .44s; }
+.tile:nth-child(12){ animation-delay: .48s; }
+.tile:nth-child(13){ animation-delay: .52s; }
+.tile:nth-child(14){ animation-delay: .56s; }
+@keyframes tileRise{
+  from{ opacity:0; transform: translateY(14px) scale(.985); }
+  to  { opacity:1; transform: translateY(0) scale(1); }
+}
+.tile:hover{
+  transform: translateY(-4px);
+  box-shadow: var(--shadow-lift);
+  border-color: rgba(255,255,255,0.85);
+}
+.tile.selected{
+  border-color: var(--celadon-400);
+  box-shadow: 0 0 0 2px rgba(122,166,148,0.32), var(--shadow-lift);
+}
+.tile:focus-visible{ outline: 3px solid var(--celadon-300); outline-offset: 2px; }
+
+.tile-head{ display:flex; justify-content: space-between; align-items: flex-start; }
+.type-badge{
+  font-family: var(--font-mono); font-size: 9.5px; font-weight: 600;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  padding: 4px 8px; border-radius: var(--radius-xs);
+  color: #fff;
+}
+.type-badge[data-t="pdf"]   { background: var(--type-pdf); }
+.type-badge[data-t="img"]   { background: var(--type-img); }
+.type-badge[data-t="doc"]   { background: var(--type-doc); }
+.type-badge[data-t="zip"]   { background: var(--type-zip); }
+.type-badge[data-t="code"]  { background: var(--type-code); }
+.type-badge[data-t="audio"] { background: var(--type-audio); }
+.type-badge[data-t="video"] { background: var(--type-video); }
+.type-badge[data-t="folder"]{ background: var(--type-folder); color: var(--ink-900); }
+
+.star{
+  width: 26px; height: 26px; border-radius: 50%;
+  display: grid; place-items: center;
+  color: var(--ink-300);
+  transition: color .2s, transform .2s var(--ease-spring), background .2s;
+}
+.star svg{ width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+.star:hover{ background: rgba(255,255,255,0.7); color: var(--gold); transform: scale(1.1); }
+.star.on{ color: var(--gold); }
+.star.on svg{ fill: var(--gold); }
+
+.thumb{
+  margin: 22px 0 18px;
+  display: grid; place-items: center;
+  position: relative;
+}
+.thumb-icon{
+  width: 72px; height: 72px;
+  display: grid; place-items: center;
+  position: relative;
+}
+.thumb-icon svg{ width: 100%; height: 100%; }
+.thumb-preview{
+  width: 100%; aspect-ratio: 4/3;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background-size: cover; background-position: center;
+  box-shadow: inset 0 0 0 1px rgba(31,51,41,0.08);
+  margin: 0;
+}
+
+.tile-foot{ margin-top: auto; min-width: 0; }
+.fname{
+  font-family: var(--font-display);
+  font-weight: 500; font-size: 15px;
+  letter-spacing: -0.01em;
+  font-variation-settings: "opsz" 14, "SOFT" 60;
+  color: var(--ink-900);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fmeta{
+  font-family: var(--font-mono); font-size: 11px;
+  color: var(--ink-500); margin-top: 4px;
+  display: flex; align-items: center; gap: 6px;
+}
+.fmeta .dot{ width: 3px; height: 3px; border-radius: 50%; background: var(--ink-300); }
+
+.tile-actions{
+  position: absolute; top: 10px; right: 44px;
+  display: flex; gap: 4px;
+  opacity: 0; transform: translateY(-4px);
+  transition: opacity .2s, transform .2s var(--ease-out);
+}
+.tile:hover .tile-actions{ opacity: 1; transform: translateY(0); }
+.tile-actions button{
+  width: 26px; height: 26px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: rgba(255,255,255,0.85);
+  color: var(--ink-700);
+  box-shadow: 0 2px 6px rgba(31,51,41,0.12);
+  transition: color .15s, transform .15s;
+}
+.tile-actions button:hover{ color: var(--celadon-700); transform: scale(1.08); }
+.tile-actions button svg{ width: 12px; height: 12px; }
+
+/* 文件夹卡变体 */
+.tile.folder{
+  background: linear-gradient(150deg, rgba(212,165,116,0.18), rgba(255,255,255,0.65));
+}
+.tile.folder .thumb-icon{ width: 80px; height: 80px; }
+
+/* 列表视图 */
+.list{ display:none; flex-direction: column; gap: 6px; padding: 4px 0; }
+.workspace.is-list .grid{ display: none; }
+.workspace.is-list .list{ display: flex; }
+.row{
+  display: grid;
+  grid-template-columns: 28px 1fr 110px 90px 140px 90px;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.5);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background .15s, border-color .15s;
+}
+.row:hover{ background: rgba(255,255,255,0.85); border-color: var(--mist-edge); }
+.row .ic{ width:22px; height:22px; }
+.row .rname{ font-family: var(--font-display); font-size: 14px; font-weight: 500; font-variation-settings: "opsz" 14, "SOFT" 60; color: var(--ink-900); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .rtype, .row .rsize, .row .rdate, .row .rstar{ font-family: var(--font-mono); font-size: 11px; color: var(--ink-500); }
+.row .rstar{ text-align: right; }
+.row-head{
+  background: none; cursor: default;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-500);
+  padding: 6px 14px;
+  border: 0;
+}
+.row-head:hover{ background: none; border-color: transparent; }
+
+/* 状态栏 */
+.statusbar{
+  display: flex; justify-content: space-between; align-items: center;
+  margin-top: 6px;
+  font-family: var(--font-mono); font-size: 11px; color: var(--ink-500);
+}
+.statusbar .left, .statusbar .right{ display: flex; align-items: center; gap: 14px; }
+.statusbar kbd{
+  font-family: var(--font-mono); font-size: 10px;
+  padding: 2px 5px; border-radius: 4px;
+  background: rgba(255,255,255,0.7); border: 1px solid rgba(31,51,41,0.08);
+  color: var(--ink-700);
+}
+
+/* ──────────────────────────────────────────────────────────
+   侧滑详情面板
+   ────────────────────────────────────────────────────────── */
+.inspector{
+  position: fixed; top: 90px; right: 18px; bottom: 18px;
+  width: 360px;
+  padding: 24px 24px 22px;
+  z-index: 60;
+  transform: translateX(calc(100% + 32px));
+  opacity: 0; pointer-events: none;
+  transition: transform .5s var(--ease-out), opacity .35s;
+  display: flex; flex-direction: column; gap: 18px;
+  overflow-y: auto;
+}
+.inspector.open{ transform: translateX(0); opacity: 1; pointer-events: auto; }
+.insp-close{
+  position: absolute; top: 14px; right: 14px;
+  width: 32px; height: 32px; border-radius: 50%;
+  display: grid; place-items: center; color: var(--ink-500);
+  transition: background .2s, color .2s;
+}
+.insp-close:hover{ background: rgba(31,51,41,0.06); color: var(--ink-900); }
+.insp-close svg{ width: 14px; height: 14px; }
+
+.insp-preview{
+  width: 100%; aspect-ratio: 4/3;
+  border-radius: var(--radius-md);
+  background-image: linear-gradient(135deg, var(--celadon-200), var(--gold) 60%, var(--terra-soft));
+  display: grid; place-items: center; color: rgba(255,255,255,0.85);
+  font-family: var(--font-display); font-style: italic; font-size: 18px;
+  letter-spacing: -0.01em;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.5);
+}
+.insp-title{ font-family: var(--font-display); font-size: 22px; font-weight: 500; letter-spacing: -0.02em; font-variation-settings: "opsz" 24, "SOFT" 60; color: var(--ink-900); word-break: break-all; }
+.insp-sub{ font-family: var(--font-mono); font-size: 11px; color: var(--ink-500); margin-top: 4px; }
+
+.insp-actions{ display: flex; gap: 8px; }
+.insp-actions button{
+  flex: 1; padding: 10px 12px;
+  border-radius: var(--radius-md);
+  font-size: 13px; font-weight: 500;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  background: rgba(255,255,255,0.65);
+  border: 1px solid var(--mist-edge);
+  color: var(--ink-700);
+  transition: background .2s, transform .2s var(--ease-spring), border-color .2s;
+}
+.insp-actions button:hover{ background: #fff; transform: translateY(-1px); }
+.insp-actions button svg{ width: 14px; height: 14px; }
+.insp-actions button.primary{
+  background: var(--celadon-700); color: var(--ivory-soft);
+  border-color: var(--celadon-700);
+}
+.insp-actions button.primary:hover{ background: var(--celadon-500); border-color: var(--celadon-500); }
+
+.insp-section h4{
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--ink-500); margin-bottom: 10px; font-weight: 500;
+}
+.kv{ display: grid; grid-template-columns: 86px 1fr; gap: 6px 12px; font-size: 13px; }
+.kv dt{ color: var(--ink-500); font-family: var(--font-mono); font-size: 11px; padding-top: 2px; }
+.kv dd{ color: var(--ink-900); font-family: var(--font-mono); font-size: 12px; word-break: break-all; }
+
+.share-link{
+  display:flex; align-items: center; gap: 8px;
+  padding: 10px 12px;
+  background: rgba(31,51,41,0.04);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-700);
+}
+.share-link span{ flex:1; overflow:hidden; text-overflow: ellipsis; white-space: nowrap; }
+.share-link button{
+  font-family: var(--font-mono); font-size: 10px;
+  color: var(--celadon-700); padding: 4px 8px;
+  border-radius: var(--radius-xs);
+  transition: background .2s;
+}
+.share-link button:hover{ background: rgba(122,166,148,0.18); }
+
+.timeline{ display: flex; flex-direction: column; gap: 10px; }
+.tl-item{ display: flex; gap: 10px; font-size: 12px; }
+.tl-item .marker{
+  width: 8px; height: 8px; border-radius: 50%; background: var(--celadon-400);
+  margin-top: 6px; flex: none;
+  box-shadow: 0 0 0 4px rgba(122,166,148,0.18);
+}
+.tl-item .body{ color: var(--ink-700); }
+.tl-item .body em{ font-style: normal; color: var(--ink-900); font-weight: 500; }
+.tl-item .body time{ display:block; font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-500); margin-top: 2px; }
+
+/* ──────────────────────────────────────────────────────────
+   拖放叠加
+   ────────────────────────────────────────────────────────── */
+.dropzone{
+  position: fixed; inset: 18px;
+  border-radius: var(--radius-xl);
+  background: rgba(184,212,197,0.36);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 2px dashed var(--celadon-700);
+  display: grid; place-items: center;
+  pointer-events: none; opacity: 0; z-index: 80;
+  transition: opacity .25s var(--ease-out);
+}
+.dropzone.show{ opacity: 1; pointer-events: auto; }
+.drop-card{
+  text-align: center;
+  padding: 36px 48px;
+  background: rgba(255,255,255,0.85);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-deep);
+}
+.drop-card .ring{
+  width: 96px; height: 96px; margin: 0 auto 18px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--celadon-100), var(--celadon-200) 70%);
+  display: grid; place-items: center;
+  position: relative;
+}
+.drop-card .ring::before, .drop-card .ring::after{
+  content:''; position: absolute; inset: -8px;
+  border-radius: 50%;
+  border: 1px solid var(--celadon-400);
+  opacity: 0;
+  animation: ripple 1.8s var(--ease-out) infinite;
+}
+.drop-card .ring::after{ animation-delay: 0.9s; }
+@keyframes ripple{
+  0%{ inset: 0; opacity: 0.7; }
+  100%{ inset: -32px; opacity: 0; }
+}
+.drop-card .ring svg{ width: 36px; height: 36px; color: var(--celadon-700); }
+.drop-card h3{
+  font-family: var(--font-display);
+  font-size: 28px; font-weight: 500; letter-spacing: -0.02em;
+  font-variation-settings: "opsz" 36, "SOFT" 60;
+  color: var(--ink-900);
+}
+.drop-card p{ font-family: var(--font-mono); font-size: 12px; color: var(--ink-500); margin-top: 6px; }
+
+/* Toast */
+.toast{
+  position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(20px);
+  padding: 12px 20px;
+  background: var(--ink-900); color: var(--ivory-soft);
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  box-shadow: var(--shadow-deep);
+  opacity: 0; pointer-events: none; z-index: 90;
+  transition: opacity .25s, transform .35s var(--ease-spring);
+}
+.toast.show{ opacity: 1; transform: translateX(-50%) translateY(0); }
+
+@media (prefers-reduced-motion: reduce){
+  *, *::before, *::after{ animation-duration: 0s !important; transition-duration: 0s !important; }
+}
+
+/* 响应式 */
+@media (max-width: 960px){
+  .shell{ grid-template-columns: 1fr; grid-template-rows: 72px auto 1fr; }
+  .sidebar{ grid-column: 1; grid-row: 2; max-height: 220px; }
+  .workspace{ grid-column: 1; grid-row: 3; padding: 18px; }
+  .inspector{ width: calc(100vw - 36px); }
+}
+</style>
+</head>
+
+<body>
+
+<div class="stage" aria-hidden="true"></div>
+<div class="grain" aria-hidden="true"></div>
+
+<div class="shell">
+
+  <!-- ────── 顶部 bar ────── -->
+  <header class="topbar glass" role="banner">
+    <div class="brand">
+      <span class="mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7c0-1.1.9-2 2-2h4l2 2h6a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z"/></svg>
+      </span>
+      <div class="name">f<em>4</em>ss<span style="opacity:.5;font-weight:400">　·　文件库</span></div>
+    </div>
+
+    <div class="search" role="search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input type="search" placeholder="搜索文件、文件夹、标签…" aria-label="搜索">
+      <span class="kbd">⌘K</span>
+    </div>
+
+    <div class="top-actions">
+      <button class="icon-btn" aria-label="筛选">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18M6 12h12M10 19h4"/></svg>
+      </button>
+      <button class="icon-btn has-dot" aria-label="活动">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg>
+      </button>
+      <button class="icon-btn" aria-label="主题">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/><circle cx="12" cy="12" r="4"/></svg>
+      </button>
+      <div class="avatar" title="月知">月</div>
+    </div>
+  </header>
+
+  <!-- ────── 侧栏 ────── -->
+  <aside class="sidebar glass" aria-label="导航">
+    <div class="user-card">
+      <div>
+        <div class="who">月知工作室</div>
+        <div class="where">share-test · :18811</div>
+      </div>
+      <span class="pulse" title="在线"></span>
+    </div>
+
+    <button class="upload-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17V3M5 10l7-7 7 7M5 21h14"/></svg>
+      上传文件
+    </button>
+
+    <nav class="nav-section" aria-label="主导航">
+      <div class="nav-title">浏览</div>
+      <button class="nav-item active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5 12 3l9 6.5V20a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z"/></svg>
+        全部文件
+        <span class="count">142</span>
+      </button>
+      <button class="nav-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        最近
+        <span class="count">12</span>
+      </button>
+      <button class="nav-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m12 17.3-6.18 3.7L7 14.14 2 9.27l6.91-1L12 2l3.09 6.26L22 9.27l-5 4.88L18.18 21Z"/></svg>
+        收藏
+        <span class="count">8</span>
+      </button>
+      <button class="nav-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M5 6l1 14a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-14"/></svg>
+        回收站
+        <span class="count">3</span>
+      </button>
+    </nav>
+
+    <nav class="nav-section" aria-label="标签">
+      <div class="nav-title">标签</div>
+      <div class="tag-cloud">
+        <span class="tag"><span class="dot" style="background:var(--terra)"></span>季度报告</span>
+        <span class="tag"><span class="dot" style="background:var(--celadon-400)"></span>合同</span>
+        <span class="tag"><span class="dot" style="background:var(--gold)"></span>设计</span>
+        <span class="tag"><span class="dot" style="background:var(--type-doc)"></span>研究</span>
+        <span class="tag"><span class="dot" style="background:var(--type-audio)"></span>访谈</span>
+      </div>
+    </nav>
+
+    <div class="capacity">
+      <div class="capacity-head">
+        <span class="label">存储</span>
+        <span class="val">24.6 GB / 64 GB</span>
+      </div>
+      <div class="capacity-bar"><div class="capacity-fill"></div></div>
+      <div class="capacity-foot"><strong>38%</strong> 已用 · 自动归档已启用</div>
+    </div>
+  </aside>
+
+  <!-- ────── 工作区 ────── -->
+  <main class="workspace" id="workspace">
+    <div class="work-head">
+      <div class="crumbs" aria-label="路径">
+        <a href="#">~</a><span class="sep">/</span>
+        <a href="#">Documents</a><span class="sep">/</span>
+        <a href="#">Q2 archive</a><span class="sep">/</span>
+        <span class="here">research notes</span>
+      </div>
+
+      <div class="title-row">
+        <div>
+          <h1 class="page-title">Q2 <em>archive</em></h1>
+          <div class="page-meta">
+            <strong>14</strong> 项 <span class="sep">·</span>
+            <strong>24.6 MB</strong> <span class="sep">·</span>
+            更新于 <strong>3 分钟前</strong>
+          </div>
+        </div>
+
+        <div class="view-controls">
+          <span class="sort-pill">
+            <span class="lbl">排序</span>修改时间 ↓
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </span>
+          <div class="view-toggle" role="group" aria-label="视图">
+            <button class="on" id="vGrid" aria-label="网格视图">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.4"/><rect x="14" y="3" width="7" height="7" rx="1.4"/><rect x="3" y="14" width="7" height="7" rx="1.4"/><rect x="14" y="14" width="7" height="7" rx="1.4"/></svg>
+            </button>
+            <button id="vList" aria-label="列表视图">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13"/><circle cx="4" cy="6" r="1.2"/><circle cx="4" cy="12" r="1.2"/><circle cx="4" cy="18" r="1.2"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-row" role="tablist">
+        <button class="tab active" role="tab">全部 <span class="num">14</span></button>
+        <button class="tab" role="tab">文档 <span class="num">5</span></button>
+        <button class="tab" role="tab">图像 <span class="num">3</span></button>
+        <button class="tab" role="tab">代码 <span class="num">2</span></button>
+        <button class="tab" role="tab">压缩 <span class="num">2</span></button>
+        <button class="tab" role="tab">音视频 <span class="num">2</span></button>
+      </div>
+    </div>
+
+    <div class="scroll-area">
+      <div class="section-label">文件夹</div>
+      <div class="grid">
+
+        <!-- 文件夹卡 -->
+        <article class="tile folder" tabindex="0" data-name="research-notes" data-type="folder">
+          <div class="tile-head">
+            <span class="type-badge" data-t="folder">DIR</span>
+            <button class="star" aria-label="收藏"><svg viewBox="0 0 24 24"><path d="m12 17.3-6.18 3.7L7 14.14 2 9.27l6.91-1L12 2l3.09 6.26L22 9.27l-5 4.88L18.18 21Z"/></svg></button>
+          </div>
+          <div class="thumb">
+            <div class="thumb-icon">
+              <svg viewBox="0 0 80 80" fill="none">
+                <defs><linearGradient id="f1" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#E8C9A8"/><stop offset="1" stop-color="#C97B5C"/></linearGradient></defs>
+                <path d="M10 22a4 4 0 0 1 4-4h18l6 8h28a4 4 0 0 1 4 4v32a4 4 0 0 1-4 4H14a4 4 0 0 1-4-4Z" fill="url(#f1)" stroke="#A85A3F" stroke-width="1.2"/>
+                <path d="M14 28h52" stroke="#fff" stroke-opacity=".6" stroke-width="1"/>
+              </svg>
+            </div>
+          </div>
+          <div class="tile-foot">
+            <div class="fname">research notes</div>
+            <div class="fmeta">17 项 <span class="dot"></span> 2 天前</div>
+          </div>
+          <div class="tile-actions">
+            <button aria-label="重命名"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg></button>
+            <button aria-label="更多"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/></svg></button>
+          </div>
+        </article>
+
+        <article class="tile folder" tabindex="0" data-type="folder">
+          <div class="tile-head"><span class="type-badge" data-t="folder">DIR</span><button class="star" aria-label="收藏"><svg viewBox="0 0 24 24"><path d="m12 17.3-6.18 3.7L7 14.14 2 9.27l6.91-1L12 2l3.09 6.26L22 9.27l-5 4.88L18.18 21Z"/></svg></button></div>
+          <div class="thumb"><div class="thumb-icon">
+            <svg viewBox="0 0 80 80" fill="none">
+              <path d="M10 22a4 4 0 0 1 4-4h18l6 8h28a4 4 0 0 1 4 4v32a4 4 0 0 1-4 4H14a4 4 0 0 1-4-4Z" fill="url(#f1)" stroke="#A85A3F" stroke-width="1.2"/>
+            </svg></div></div>
+          <div class="tile-foot"><div class="fname">team photos</div><div class="fmeta">142 项 <span class="dot"></span> 上周</div></div>
+        </article>
+
+        <article class="tile folder" tabindex="0" data-type="folder">
+          <div class="tile-head"><span class="type-badge" data-t="folder">DIR</span><button class="star on" aria-label="已收藏"><svg viewBox="0 0 24 24"><path d="m12 17.3-6.18 3.7L7 14.14 2 9.27l6.91-1L12 2l3.09 6.26L22 9.27l-5 4.88L18.18 21Z"/></svg></button></div>
+          <div class="thumb"><div class="thumb-icon">
+            <svg viewBox="0 0 80 80" fill="none">
+              <path d="M10 22a4 4 0 0 1 4-4h18l6 8h28a4 4 0 0 1 4 4v32a4 4 0 0 1-4 4H14a4 4 0 0 1-4-4Z" fill="url(#f1)" stroke="#A85A3F" stroke-width="1.2"/>
+            </svg></div></div>
+          <div class="tile-foot"><div class="fname">contracts</div><div class="fmeta">9 项 <span class="dot"></span> 5 月 28</div></div>
+        </article>
+
+      </div>
+
+      <div class="section-label">文件</div>
+      <div class="grid">
+
+        <!-- PDF -->
+        <article class="tile selected" tabindex="0" data-type="pdf" data-name="Annual Report 2026.pdf">
+          <div class="tile-head"><span class="type-badge" data-t="pdf">PDF</span><button class="star on" aria-label="已收藏"><svg viewBox="0 0 24 24"><path d="m12 17.3-6.18 3.7L7 14.14 2 9.27l6.91-1L12 2l3.09 6.26L22 9.27l-5 4.88L18.18 21Z"/></svg></button></div>
+          <div class="thumb"><div class="thumb-icon">
+            <svg viewBox="0 0 80 80" fill="none">
+              <defs><linearGradient id="p1" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFF1ED"/><stop offset="1" stop-color="#F9CEC2"/></linearGradient></defs>
+              <rect x="18" y="10" width="44" height="60" rx="4" fill="url(#p1)" stroke="#C04A35" stroke-width="1.2"/>
+              <path d="M50 10v12h12" stroke="#C04A35" stroke-width="1.2" fill="none"/>
+              <text x="40" y="56" text-anchor="middle" font-family="Geist Mono,monospace" font-size="13" fill="#C04A35" font-weight="600">PDF</text>
+            </svg></div></div>
+          <div class="tile-foot"><div class="fname">Annual Report 2026.pdf</div><div class="fmeta">4.2 MB <span class="dot"></span> 2 天前</div></div>
+          <div class="tile-actions">
+            <button aria-label="下载"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v14M5 10l7 7 7-7M5 21h14"/></svg></button>
+            <button aria-label="更多"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="6" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/></svg></button>
+          </div>
+        </article>
+
+        <!-- 图像缩略图 -->
+        <article class="tile" tabindex="0" data-type="img">
+          <div class="tile-head"><span class="type-badge" data-t="img">JPG</span><button class="star" aria-label="收藏"><svg viewBox="0 0 24 24"><path d="m12 17.3-6.18 3.7L7 14.14 2 9.27l6.91-1L12 2l3.09 6.26L22 9.27l-5 4.88L18.18 21Z"/></svg></button></div>
+          <div class="thumb"><div class="thumb-preview" style="background-image: linear-gradient(135deg, var(--celadon-200), var(--celadon-400) 60%, var(--celadon-700));"></div></div>
+          <div class="tile-foot"><div class="fname">仓山·清晨.jpg</div><div class="fmeta">2.1 MB <span class="dot"></span> 800×600</div></div>
+        </article>
+
+        <article class="tile" tabindex="0" data-type="img">
+          <div class="tile-head"><span class="type-badge" data-t="img">PNG</span><button class="star" aria-label="收藏"><svg viewBox="0 0 24 24"><path d="m12 17.3-6.18 3.7L7 14.14 2 9.27l6.91-1L12 2l3.09 6.26L22 9.27l-5 4.88L18.18 21Z"/></svg></button></div>
+          <div class="thumb"><div class="thumb-preview" style="background-image: linear-gradient(135deg, var(--terra-soft), var(--terra), var(--rust));"></div></div>
+          <div class="tile-foot"><div class="fname">moodboard.png</div><div class="fmeta">800 KB <span class="dot"></span> 1920×1080</div></div>
+        </article>
+
+        <!-- DOC -->
+        <article class="tile" tabindex="0" data-type="doc">
+          <div class="tile-head"><span class="type-badge" data-t="doc">DOCX</span><button class="star" aria-label="收藏"><svg viewBox="0 0 24 24"><path d="m12 17.3-6.18 3.7L7 14.14 2 9.27l6.91-1L12 2l3.09 6.26L22 9.27l-5 4.88L18.18 21Z"/></svg></button></div>
+          <div class="thumb"><div class="thumb-icon">
+            <svg viewBox="0 0 80 80" fill="none">
+              <rect x="18" y="10" width="44" height="60" rx="4" fill="#EDF2F7" stroke="#4A6B8A" stroke-width="1.2"/>
+              <path d="M26 28h28M26 36h28M26 44h22M26 52h26" stroke="#4A6B8A" stroke-width="1.2" stroke-linecap="round"/>
+            </svg></div></div>
+          <div class="tile-foot"><div class="fname">采访提纲 v3.docx</div><div class="fmeta">128 KB <span class="dot"></span> 今天 14:02</div></div>
+        </article>
+
+        <!-- ZIP -->
+        <article class="tile" tabindex="0" data-type="zip">
+          <div class="tile-head"><span class="type-badge" data-t="zip">ZIP</span><button class="star" aria-label="收藏"><svg viewBox="0 0 24 24"><path d="m12 17.3-6.18 3.7L7 14.14 2 9.27l6.91-1L12 2l3.09 6.26L22 9.27l-5 4.88L18.18 21Z"/></svg></button></div>
+          <div class="thumb"><div class="thumb-icon">
+            <svg viewBox="0 0 80 80" fill="none">
+              <rect x="18" y="10" width="44" height="60" rx="4" fill="#FAEEE6" stroke="#C97B5C" stroke-width="1.2"/>
+              <rect x="36" y="14" width="8" height="6" fill="#C97B5C"/>
+              <rect x="36" y="22" width="8" height="6" fill="#fff" stroke="#C97B5C" stroke-width="1"/>
+              <rect x="36" y="30" width="8" height="6" fill="#C97B5C"/>
+              <rect x="36" y="38" width="8" height="6" fill="#fff" stroke="#C97B5C" stroke-width="1"/>
+              <rect x="36" y="46" width="8" height="10" fill="#fff" stroke="#C97B5C" stroke-width="1"/>
+            </svg></div></div>
+          <div class="tile-foot"><div class="fname">archive-2026Q2.zip</div><div class="fmeta">12.4 MB <span class="dot"></span> 含 86 项</div></div>
+        </article>
+
+        <!-- CODE -->
+        <article class="tile" tabindex="0" data-type="code">
+          <div class="tile-head"><span class="type-badge" data-t="code">RS</span><button class="star" aria-label="收藏"><svg viewBox="0 0 24 24"><path d="m12 17.3-6.18 3.7L7 14.14 2 9.27l6.91-1L12 2l3.09 6.26L22 9.27l-5 4.88L18.18 21Z"/></svg></button></div>
+          <div class="thumb"><div class="thumb-icon">
+            <svg viewBox="0 0 80 80" fill="none">
+              <rect x="14" y="14" width="52" height="52" rx="6" fill="#EAF1ED" stroke="#5C7A5C" stroke-width="1.2"/>
+              <path d="m30 32-6 8 6 8M50 32l6 8-6 8M44 28l-8 24" stroke="#5C7A5C" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            </svg></div></div>
+          <div class="tile-foot"><div class="fname">parser.rs</div><div class="fmeta">9.8 KB <span class="dot"></span> 312 行</div></div>
+        </article>
+
+        <!-- AUDIO -->
+        <article class="tile" tabindex="0" data-type="audio">
+          <div class="tile-head"><span class="type-badge" data-t="audio">WAV</span><button class="star" aria-label="收藏"><svg viewBox="0 0 24 24"><path d="m12 17.3-6.18 3.7L7 14.14 2 9.27l6.91-1L12 2l3.09 6.26L22 9.27l-5 4.88L18.18 21Z"/></svg></button></div>
+          <div class="thumb"><div class="thumb-icon">
+            <svg viewBox="0 0 80 80" fill="none" stroke="#8B6FAA" stroke-width="2" stroke-linecap="round">
+              <path d="M8 40h6M18 32v16M26 24v32M34 36v8M42 28v24M50 32v16M58 38v4M66 40h6"/>
+            </svg></div></div>
+          <div class="tile-foot"><div class="fname">访谈·林师傅.wav</div><div class="fmeta">3.6 MB <span class="dot"></span> 12:34</div></div>
+        </article>
+
+        <!-- VIDEO -->
+        <article class="tile" tabindex="0" data-type="video">
+          <div class="tile-head"><span class="type-badge" data-t="video">MP4</span><button class="star" aria-label="收藏"><svg viewBox="0 0 24 24"><path d="m12 17.3-6.18 3.7L7 14.14 2 9.27l6.91-1L12 2l3.09 6.26L22 9.27l-5 4.88L18.18 21Z"/></svg></button></div>
+          <div class="thumb"><div class="thumb-preview" style="background-image: linear-gradient(135deg, #8A4A6B 0%, #5C2E47 70%, #2A1623 100%); display:grid; place-items:center;">
+            <svg viewBox="0 0 24 24" width="36" height="36" fill="rgba(255,255,255,.92)"><path d="m8 5 12 7-12 7Z"/></svg>
+          </div></div>
+          <div class="tile-foot"><div class="fname">site-walkthrough.mp4</div><div class="fmeta">28.2 MB <span class="dot"></span> 3:42</div></div>
+        </article>
+
+        <!-- MORE -->
+        <article class="tile" tabindex="0" data-type="doc">
+          <div class="tile-head"><span class="type-badge" data-t="doc">MD</span><button class="star" aria-label="收藏"><svg viewBox="0 0 24 24"><path d="m12 17.3-6.18 3.7L7 14.14 2 9.27l6.91-1L12 2l3.09 6.26L22 9.27l-5 4.88L18.18 21Z"/></svg></button></div>
+          <div class="thumb"><div class="thumb-icon">
+            <svg viewBox="0 0 80 80" fill="none">
+              <rect x="18" y="10" width="44" height="60" rx="4" fill="#EDF2F7" stroke="#4A6B8A" stroke-width="1.2"/>
+              <text x="40" y="48" text-anchor="middle" font-family="Geist Mono,monospace" font-size="16" font-weight="600" fill="#4A6B8A">M↓</text>
+            </svg></div></div>
+          <div class="tile-foot"><div class="fname">README.md</div><div class="fmeta">2.0 KB <span class="dot"></span> 5 月 30</div></div>
+        </article>
+
+        <article class="tile" tabindex="0" data-type="pdf">
+          <div class="tile-head"><span class="type-badge" data-t="pdf">PDF</span><button class="star" aria-label="收藏"><svg viewBox="0 0 24 24"><path d="m12 17.3-6.18 3.7L7 14.14 2 9.27l6.91-1L12 2l3.09 6.26L22 9.27l-5 4.88L18.18 21Z"/></svg></button></div>
+          <div class="thumb"><div class="thumb-icon">
+            <svg viewBox="0 0 80 80" fill="none">
+              <rect x="18" y="10" width="44" height="60" rx="4" fill="url(#p1)" stroke="#C04A35" stroke-width="1.2"/>
+              <path d="M50 10v12h12" stroke="#C04A35" stroke-width="1.2" fill="none"/>
+              <text x="40" y="56" text-anchor="middle" font-family="Geist Mono,monospace" font-size="13" fill="#C04A35" font-weight="600">PDF</text>
+            </svg></div></div>
+          <div class="tile-foot"><div class="fname">Q2 forecast.pdf</div><div class="fmeta">880 KB <span class="dot"></span> 昨天</div></div>
+        </article>
+
+        <article class="tile" tabindex="0" data-type="img">
+          <div class="tile-head"><span class="type-badge" data-t="img">SVG</span><button class="star" aria-label="收藏"><svg viewBox="0 0 24 24"><path d="m12 17.3-6.18 3.7L7 14.14 2 9.27l6.91-1L12 2l3.09 6.26L22 9.27l-5 4.88L18.18 21Z"/></svg></button></div>
+          <div class="thumb"><div class="thumb-preview" style="background: repeating-linear-gradient(45deg, var(--celadon-100) 0 12px, var(--celadon-200) 12px 24px);"></div></div>
+          <div class="tile-foot"><div class="fname">logo-tile.svg</div><div class="fmeta">14 KB <span class="dot"></span> 矢量</div></div>
+        </article>
+
+      </div>
+
+      <!-- 列表视图 -->
+      <div class="list">
+        <div class="row row-head">
+          <span></span><span>名称</span><span>类型</span><span>大小</span><span>修改时间</span><span style="text-align:right">操作</span>
+        </div>
+        <div class="row"><span class="ic"><svg viewBox="0 0 24 24" fill="#D4A574"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg></span><span class="rname">research notes</span><span class="rtype">文件夹</span><span class="rsize">17 项</span><span class="rdate">2 天前</span><span class="rstar">★</span></div>
+        <div class="row"><span class="ic"><svg viewBox="0 0 24 24" fill="#C04A35"><rect x="5" y="3" width="14" height="18" rx="1.6"/></svg></span><span class="rname">Annual Report 2026.pdf</span><span class="rtype">PDF</span><span class="rsize">4.2 MB</span><span class="rdate">2 天前</span><span class="rstar">★</span></div>
+        <div class="row"><span class="ic"><svg viewBox="0 0 24 24" fill="#7AA694"><rect x="3" y="5" width="18" height="14" rx="1.6"/></svg></span><span class="rname">仓山·清晨.jpg</span><span class="rtype">JPG</span><span class="rsize">2.1 MB</span><span class="rdate">2 天前</span><span class="rstar"></span></div>
+        <div class="row"><span class="ic"><svg viewBox="0 0 24 24" fill="#C97B5C"><rect x="5" y="3" width="14" height="18" rx="1.6"/></svg></span><span class="rname">archive-2026Q2.zip</span><span class="rtype">ZIP</span><span class="rsize">12.4 MB</span><span class="rdate">5月29</span><span class="rstar"></span></div>
+      </div>
+
+    </div>
+
+    <div class="statusbar">
+      <div class="left">
+        <span>14 项 · 24.6 MB · 已选 <strong style="color:var(--ink-900)">1 项</strong></span>
+      </div>
+      <div class="right">
+        <span><kbd>↑↓←→</kbd> 移动</span>
+        <span><kbd>↵</kbd> 打开</span>
+        <span><kbd>Space</kbd> 预览</span>
+        <span><kbd>⌘D</kbd> 下载</span>
+      </div>
+    </div>
+  </main>
+
+</div>
+
+<!-- ────── 详情侧滑面板 ────── -->
+<aside class="inspector glass" id="inspector" aria-label="文件详情" aria-hidden="true">
+  <button class="insp-close" id="inspClose" aria-label="关闭">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+  </button>
+
+  <div class="insp-preview">Annual <em>Report</em></div>
+
+  <div>
+    <div class="insp-title">Annual Report 2026.pdf</div>
+    <div class="insp-sub">application/pdf · 修改于 2026-06-05 09:42</div>
+  </div>
+
+  <div class="insp-actions">
+    <button class="primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v14M5 10l7 7 7-7M5 21h14"/></svg>下载</button>
+    <button><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.5 10.5 7-4M8.5 13.5l7 4"/></svg>分享</button>
+    <button><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><circle cx="5" cy="12" r="2"/></svg></button>
+  </div>
+
+  <div class="insp-section">
+    <h4>属性</h4>
+    <dl class="kv">
+      <dt>大小</dt><dd>4,294,128 字节 · 4.2 MB</dd>
+      <dt>类型</dt><dd>PDF 文档 · v1.7</dd>
+      <dt>页数</dt><dd>48 页</dd>
+      <dt>路径</dt><dd>/Documents/Q2-archive/<wbr>Annual Report 2026.pdf</dd>
+      <dt>SHA-256</dt><dd>3f8a…b9e2</dd>
+    </dl>
+  </div>
+
+  <div class="insp-section">
+    <h4>共享链接</h4>
+    <div class="share-link">
+      <span>https://share.f4ss.io/r/Aq2-x9Vb</span>
+      <button>复制</button>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:8px;">
+      <span class="tag"><span class="dot" style="background:var(--celadon-400)"></span>7 天后过期</span>
+      <span class="tag"><span class="dot" style="background:var(--terra)"></span>需要密码</span>
+    </div>
+  </div>
+
+  <div class="insp-section">
+    <h4>活动</h4>
+    <div class="timeline">
+      <div class="tl-item"><span class="marker"></span><div class="body"><em>月知</em> 上传<time>2026-06-05 09:42</time></div></div>
+      <div class="tl-item"><span class="marker" style="background:var(--gold)"></span><div class="body"><em>外部访客</em> 下载 · IP 117.18.…<time>2026-06-05 14:08</time></div></div>
+      <div class="tl-item"><span class="marker" style="background:var(--terra)"></span><div class="body"><em>月知</em> 创建共享链接<time>2026-06-06 10:15</time></div></div>
+    </div>
+  </div>
+</aside>
+
+<!-- ────── 拖放叠加 ────── -->
+<div class="dropzone" id="dropzone" aria-hidden="true">
+  <div class="drop-card">
+    <div class="ring"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17V3M5 10l7-7 7 7M5 21h14"/></svg></div>
+    <h3>松手即上传</h3>
+    <p>支持多文件 / 文件夹 · 上限 2 GB</p>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  // 视图切换
+  const ws = document.getElementById('workspace');
+  const vg = document.getElementById('vGrid');
+  const vl = document.getElementById('vList');
+  vg.addEventListener('click', () => { ws.classList.remove('is-list'); vg.classList.add('on'); vl.classList.remove('on'); });
+  vl.addEventListener('click', () => { ws.classList.add('is-list'); vl.classList.add('on'); vg.classList.remove('on'); });
+
+  // 文件选中 + 详情面板
+  const inspector = document.getElementById('inspector');
+  const inspClose = document.getElementById('inspClose');
+  const tiles = document.querySelectorAll('.tile');
+  tiles.forEach(t => {
+    t.addEventListener('click', () => {
+      tiles.forEach(x => x.classList.remove('selected'));
+      t.classList.add('selected');
+      if (t.dataset.type !== 'folder') {
+        inspector.classList.add('open');
+        inspector.setAttribute('aria-hidden', 'false');
+      }
+    });
+    t.addEventListener('dblclick', () => {
+      toast('打开 ' + (t.dataset.name || t.querySelector('.fname').textContent));
+    });
+  });
+  inspClose.addEventListener('click', () => {
+    inspector.classList.remove('open');
+    inspector.setAttribute('aria-hidden', 'true');
+  });
+
+  // 收藏切换
+  document.querySelectorAll('.star').forEach(s => {
+    s.addEventListener('click', e => { e.stopPropagation(); s.classList.toggle('on'); });
+  });
+
+  // tab
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+    });
+  });
+
+  // 拖放
+  const dz = document.getElementById('dropzone');
+  let dragCount = 0;
+  window.addEventListener('dragenter', e => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    dragCount++; dz.classList.add('show'); dz.setAttribute('aria-hidden', 'false');
+  });
+  window.addEventListener('dragleave', () => {
+    dragCount--; if (dragCount <= 0) { dz.classList.remove('show'); dz.setAttribute('aria-hidden', 'true'); dragCount = 0; }
+  });
+  window.addEventListener('dragover', e => e.preventDefault());
+  window.addEventListener('drop', e => {
+    e.preventDefault(); dragCount = 0;
+    dz.classList.remove('show'); dz.setAttribute('aria-hidden', 'true');
+    const n = e.dataTransfer.files.length;
+    if (n) toast(`已加入上传队列 · ${n} 个文件`);
+  });
+
+  // toast
+  const toastEl = document.getElementById('toast');
+  let toastTimer;
+  function toast(msg) {
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2400);
+  }
+
+  // 截图辅助:URL hash 触发预设状态
+  if (location.hash === '#inspector') {
+    inspector.classList.add('open');
+    inspector.setAttribute('aria-hidden', 'false');
+  }
+  if (location.hash === '#drop') {
+    dz.classList.add('show');
+    dz.setAttribute('aria-hidden', 'false');
+  }
+
+  // 键盘:Esc 关闭面板,⌘K 聚焦搜索
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      inspector.classList.remove('open');
+      inspector.setAttribute('aria-hidden', 'true');
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      document.querySelector('.search input').focus();
+    }
+  });
+})();
+</script>
+
+</body>
+</html>

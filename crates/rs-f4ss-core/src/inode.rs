@@ -6,6 +6,7 @@
 //! Uses DashMap directly without an outer RwLock — DashMap is already concurrent-safe.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,7 +33,7 @@ pub enum NodeKind {
 /// Uses FNV-1a hash for deterministic inode generation.
 /// On collision, falls back to sequential allocation.
 pub struct InodeMap {
-    inode_to_path: DashMap<u64, PathBuf>,
+    inode_to_path: DashMap<u64, Arc<Path>>,
     path_to_inode: DashMap<PathBuf, u64>,
     #[expect(dead_code)]
     root: PathBuf,
@@ -49,7 +50,8 @@ impl InodeMap {
             root: root.clone(),
             next_sequential: AtomicU64::new(u64::MAX / 2),
         };
-        map.inode_to_path.insert(ROOT_INODE, root.clone());
+        map.inode_to_path
+            .insert(ROOT_INODE, Arc::from(root.clone().into_boxed_path()));
         map.path_to_inode.insert(root, ROOT_INODE);
         map
     }
@@ -88,7 +90,7 @@ impl InodeMap {
 
         // Check for collision and resolve
         if let Some(existing) = self.inode_to_path.get(&inode) {
-            if existing.value() != path {
+            if existing.value().as_ref() != path {
                 error!(
                     inode,
                     new_path = %path.display(),
@@ -106,14 +108,16 @@ impl InodeMap {
         }
 
         let path_buf = path.to_path_buf();
-        self.inode_to_path.insert(inode, path_buf.clone());
-        self.path_to_inode.insert(path_buf, inode);
+        self.path_to_inode.insert(path_buf.clone(), inode);
+        self.inode_to_path
+            .insert(inode, Arc::from(path_buf.into_boxed_path()));
         debug!(inode, path = %path.display(), ?kind, "inode registered");
         inode
     }
 
     /// Get a path by inode number.
-    pub fn get_path(&self, inode: u64) -> Option<PathBuf> {
+    /// Returns Arc<Path> for O(1) clone — avoids allocation on every FUSE callback.
+    pub fn get_path(&self, inode: u64) -> Option<Arc<Path>> {
         self.inode_to_path.get(&inode).map(|r| r.value().clone())
     }
 
@@ -128,7 +132,7 @@ impl InodeMap {
     /// Remove an inode by its number (for FUSE forget).
     pub fn remove_by_inode(&self, inode: u64) {
         if let Some((_, path)) = self.inode_to_path.remove(&inode) {
-            self.path_to_inode.remove(&path);
+            self.path_to_inode.remove(path.as_ref());
             debug!(inode, "inode forgotten");
         }
     }
@@ -160,7 +164,8 @@ impl InodeMap {
         for (inode, old, new) in updates {
             self.path_to_inode.remove(&old);
             self.path_to_inode.insert(new.clone(), inode);
-            self.inode_to_path.insert(inode, new);
+            self.inode_to_path
+                .insert(inode, Arc::from(new.into_boxed_path()));
         }
     }
 }
@@ -172,7 +177,7 @@ mod tests {
     #[test]
     fn test_root_inode() {
         let map = InodeMap::new(PathBuf::from("/"));
-        assert_eq!(map.get_path(ROOT_INODE), Some(PathBuf::from("/")));
+        assert_eq!(map.get_path(ROOT_INODE).unwrap().as_os_str(), "/");
     }
 
     #[test]
@@ -198,7 +203,7 @@ mod tests {
         let a = map.get_or_insert(path, NodeKind::File);
         let b = map.get_or_insert(path, NodeKind::File);
         assert_eq!(a, b);
-        assert_eq!(map.get_path(a), Some(path.to_path_buf()));
+        assert_eq!(map.get_path(a).unwrap().as_os_str(), path.as_os_str());
     }
 
     #[test]
@@ -225,6 +230,9 @@ mod tests {
         let file = PathBuf::from("/old/a.md");
         let inode = map.get_or_insert(&file, NodeKind::File);
         map.rename_subtree(Path::new("/old"), Path::new("/new"));
-        assert_eq!(map.get_path(inode), Some(PathBuf::from("/new/a.md")));
+        assert_eq!(
+            map.get_path(inode).unwrap().as_os_str(),
+            "/new/a.md"
+        );
     }
 }

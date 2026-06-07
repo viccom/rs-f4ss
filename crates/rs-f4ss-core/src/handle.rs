@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, RwLock};
 
 use crate::prefetch::ReadPattern;
 
@@ -14,7 +14,7 @@ pub enum WriteAtError {
 
 /// State tracked for an open file handle.
 pub struct OpenFile {
-    pub path: String,
+    pub path: Arc<str>,
     pub dirty: bool,
     /// Accumulated write buffer. Grows to fit writes at any offset.
     pub buffer: Vec<u8>,
@@ -27,27 +27,42 @@ pub struct OpenFile {
 
 /// Thread-safe file handle table.
 /// Maps u64 handles to open file state.
+/// Uses RwLock so concurrent reads don't block each other.
 #[derive(Default)]
 pub struct HandleTable {
     next_fh: AtomicU64,
-    files: Mutex<HashMap<u64, OpenFile>>,
+    files: RwLock<HashMap<u64, OpenFile>>,
 }
 
 impl HandleTable {
     pub fn new() -> Self {
         Self {
             next_fh: AtomicU64::new(1),
-            files: Mutex::new(HashMap::new()),
+            files: RwLock::new(HashMap::new()),
         }
+    }
+
+    fn read_table(&self) -> std::sync::RwLockReadGuard<'_, HashMap<u64, OpenFile>> {
+        self.files.read().unwrap_or_else(|e| {
+            tracing::warn!("Recovering from poisoned handle table lock");
+            e.into_inner()
+        })
+    }
+
+    fn write_table(&self) -> std::sync::RwLockWriteGuard<'_, HashMap<u64, OpenFile>> {
+        self.files.write().unwrap_or_else(|e| {
+            tracing::warn!("Recovering from poisoned handle table lock");
+            e.into_inner()
+        })
     }
 
     /// Allocate a new file handle for the given path.
     pub fn allocate(&self, path: String) -> u64 {
         let fh = self.next_fh.fetch_add(1, Ordering::Relaxed);
-        self.files.lock().expect("handle table lock").insert(
+        self.write_table().insert(
             fh,
             OpenFile {
-                path,
+                path: Arc::from(path),
                 dirty: false,
                 buffer: Vec::new(),
                 read_cache: None,
@@ -58,18 +73,15 @@ impl HandleTable {
     }
 
     /// Get the path associated with a file handle.
-    pub fn get_path(&self, fh: u64) -> Option<String> {
-        self.files
-            .lock()
-            .expect("handle table lock")
-            .get(&fh)
-            .map(|f| f.path.clone())
+    /// Returns Arc<str> for O(1) clone — avoids allocation on every read.
+    pub fn get_path(&self, fh: u64) -> Option<Arc<str>> {
+        self.read_table().get(&fh).map(|f| f.path.clone())
     }
 
     /// Write data to a file handle's buffer at the given offset, marking it dirty.
     /// The buffer grows to accommodate the write.
     pub fn write_at(&self, fh: u64, offset: u64, data: &[u8]) -> Result<(), WriteAtError> {
-        let mut files = self.files.lock().expect("handle table lock");
+        let mut files = self.write_table();
         if let Some(file) = files.get_mut(&fh) {
             let start = match usize::try_from(offset) {
                 Ok(s) => s,
@@ -104,7 +116,7 @@ impl HandleTable {
             );
             return Err(WriteAtError::TooLarge);
         }
-        let mut files = self.files.lock().expect("handle table lock");
+        let mut files = self.write_table();
         if let Some(file) = files.get_mut(&fh) {
             file.dirty = true;
             file.read_cache = None;
@@ -125,7 +137,7 @@ impl HandleTable {
             );
             return Err(WriteAtError::TooLarge);
         }
-        let mut files = self.files.lock().expect("handle table lock");
+        let mut files = self.write_table();
         if let Some(file) = files.get_mut(&fh) {
             if !file.dirty && file.buffer.is_empty() {
                 file.buffer = data;
@@ -140,8 +152,8 @@ impl HandleTable {
     /// Take the dirty data from a file handle, resetting the dirty flag.
     /// Returns `(path, buffer)` if dirty, `None` if not dirty or handle missing.
     /// Lock is released before the caller does I/O.
-    pub fn take_dirty(&self, fh: u64) -> Option<(String, Vec<u8>)> {
-        let mut files = self.files.lock().expect("handle table lock");
+    pub fn take_dirty(&self, fh: u64) -> Option<(Arc<str>, Vec<u8>)> {
+        let mut files = self.write_table();
         let file = files.get_mut(&fh)?;
         if !file.dirty {
             return None;
@@ -152,7 +164,7 @@ impl HandleTable {
 
     /// Restore dirty data to a file handle after a failed write.
     pub fn restore_dirty(&self, fh: u64, buffer: Vec<u8>) {
-        let mut files = self.files.lock().expect("handle table lock");
+        let mut files = self.write_table();
         if let Some(file) = files.get_mut(&fh) {
             file.dirty = true;
             file.buffer = buffer;
@@ -160,8 +172,8 @@ impl HandleTable {
     }
 
     /// Clone the current dirty data without changing handle state.
-    pub fn peek_dirty(&self, fh: u64) -> Option<(String, Vec<u8>)> {
-        let files = self.files.lock().expect("handle table lock");
+    pub fn peek_dirty(&self, fh: u64) -> Option<(Arc<str>, Vec<u8>)> {
+        let files = self.read_table();
         let file = files.get(&fh)?;
         if !file.dirty {
             return None;
@@ -171,7 +183,7 @@ impl HandleTable {
 
     /// Get the current dirty buffer length, if the handle has unflushed changes.
     pub fn dirty_len(&self, fh: u64) -> Option<usize> {
-        let files = self.files.lock().expect("handle table lock");
+        let files = self.read_table();
         let file = files.get(&fh)?;
         if !file.dirty {
             return None;
@@ -181,7 +193,7 @@ impl HandleTable {
 
     /// Read directly from the dirty write buffer for same-handle visibility.
     pub fn read_from_dirty(&self, fh: u64, offset: u64, size: u32) -> Option<Vec<u8>> {
-        let files = self.files.lock().expect("handle table lock");
+        let files = self.read_table();
         let file = files.get(&fh)?;
         if !file.dirty {
             return None;
@@ -196,22 +208,17 @@ impl HandleTable {
 
     /// Return all active file handle IDs.
     pub fn all_handles(&self) -> Vec<u64> {
-        self.files
-            .lock()
-            .expect("handle table lock")
-            .keys()
-            .copied()
-            .collect()
+        self.read_table().keys().copied().collect()
     }
 
     /// Remove a file handle, returning its state (for release).
     pub fn remove(&self, fh: u64) -> Option<OpenFile> {
-        self.files.lock().expect("handle table lock").remove(&fh)
+        self.write_table().remove(&fh)
     }
 
     /// Update read pattern for a handle, returns true if sequential.
     pub fn update_read_pattern(&self, fh: u64, offset: u64, size: u32) -> bool {
-        let mut files = self.files.lock().expect("handle table lock");
+        let mut files = self.write_table();
         if let Some(file) = files.get_mut(&fh) {
             file.read_pattern.update(offset, size)
         } else {
@@ -221,7 +228,7 @@ impl HandleTable {
 
     /// Get read pattern info (is_first_read).
     pub fn is_first_read(&self, fh: u64) -> bool {
-        let files = self.files.lock().expect("handle table lock");
+        let files = self.read_table();
         files
             .get(&fh)
             .map(|f| f.read_pattern.is_first_read())
@@ -230,7 +237,7 @@ impl HandleTable {
 
     /// Get current read cache bounds: (start_offset, data_len).
     pub fn get_cache_info(&self, fh: u64) -> Option<(u64, usize)> {
-        let files = self.files.lock().expect("handle table lock");
+        let files = self.read_table();
         files.get(&fh).and_then(|f| {
             f.read_cache
                 .as_ref()
@@ -240,7 +247,7 @@ impl HandleTable {
 
     /// Get (last_read_end, is_sequential) for a handle.
     pub fn get_read_state(&self, fh: u64) -> Option<(u64, bool)> {
-        let files = self.files.lock().expect("handle table lock");
+        let files = self.read_table();
         files
             .get(&fh)
             .map(|f| (f.read_pattern.last_read_end, f.read_pattern.is_sequential))
@@ -249,7 +256,7 @@ impl HandleTable {
     /// Try to serve a read from the handle's read cache.
     /// Returns Some(data) if cache hit, None if cache miss.
     pub fn read_from_cache(&self, fh: u64, offset: u64, size: u32) -> Option<Vec<u8>> {
-        let files = self.files.lock().expect("handle table lock");
+        let files = self.read_table();
         let file = files.get(&fh)?;
         let (cache_data, cache_offset) = file.read_cache.as_ref()?;
         let cache_end = *cache_offset + cache_data.len() as u64;
@@ -264,7 +271,7 @@ impl HandleTable {
 
     /// Store a read-ahead cache for a handle.
     pub fn set_read_cache(&self, fh: u64, data: Vec<u8>, offset: u64) {
-        let mut files = self.files.lock().expect("handle table lock");
+        let mut files = self.write_table();
         if let Some(file) = files.get_mut(&fh) {
             file.read_cache = Some((data, offset));
         }
@@ -295,7 +302,7 @@ mod tests {
     fn test_get_after_alloc() {
         let table = HandleTable::new();
         let fh = table.allocate("/test".to_string());
-        assert_eq!(table.get_path(fh).unwrap(), "/test");
+        assert_eq!(&*table.get_path(fh).unwrap(), "/test");
     }
 
     #[test]
@@ -313,7 +320,7 @@ mod tests {
         assert_eq!(table.write_at(fh, 0, b"hello"), Ok(()));
 
         let (path, buf) = table.take_dirty(fh).unwrap();
-        assert_eq!(path, "/test");
+        assert_eq!(&*path, "/test");
         assert_eq!(buf, b"hello");
 
         // After take_dirty, not dirty anymore
@@ -372,7 +379,7 @@ mod tests {
         assert_eq!(table.write_at(fh, 0, b"peek"), Ok(()));
 
         let (path, buf) = table.peek_dirty(fh).unwrap();
-        assert_eq!(path, "/peek.txt");
+        assert_eq!(&*path, "/peek.txt");
         assert_eq!(buf, b"peek");
 
         let (_, buf_after) = table.take_dirty(fh).unwrap();
@@ -386,7 +393,7 @@ mod tests {
         assert_eq!(table.replace_contents(fh, b"abc".to_vec()), Ok(()));
 
         let (path, buf) = table.take_dirty(fh).unwrap();
-        assert_eq!(path, "/replace.txt");
+        assert_eq!(&*path, "/replace.txt");
         assert_eq!(buf, b"abc");
     }
 

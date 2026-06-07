@@ -113,6 +113,19 @@ async fn handle_request(State(state): State<Arc<FileServerState>>, req: Request)
     let query = uri.query().map(|s| s.to_string());
     let body = req.into_body();
 
+    // Eagerly collect body bytes for methods that need it (PUT, PROPPATCH).
+    // PUT can be large (up to 2GB), so we only collect for small methods upfront.
+    // For PUT, we pass the streaming Body directly.
+    let (body_bytes, body_stream) = if method == Method::PUT {
+        (None, Some(body))
+    } else if method.as_str() == "PROPPATCH" {
+        // PROPPATCH XML bodies are tiny — 64KB is more than generous.
+        let bytes = axum::body::to_bytes(body, 65536).await.ok();
+        (bytes, None)
+    } else {
+        (None, None)
+    };
+
     // Auth check
     if let Err(status) = state.check_auth(&headers) {
         return (status, [("WWW-Authenticate", "Basic realm=\"rs-f4ss\"")]).into_response();
@@ -166,7 +179,10 @@ async fn handle_request(State(state): State<Arc<FileServerState>>, req: Request)
             )
             .await
         }
-        Method::PUT => handlers::handle_put(&state, &local_path, body).await,
+        Method::PUT => {
+            let body = body_stream.unwrap_or_else(axum::body::Body::empty);
+            handlers::handle_put(&state, &local_path, body).await
+        }
         Method::DELETE => handlers::handle_delete(&state, &local_path, is_dir, is_file).await,
         Method::OPTIONS => handlers::handle_options(),
         _ => {
@@ -187,9 +203,11 @@ async fn handle_request(State(state): State<Arc<FileServerState>>, req: Request)
                     )
                     .await
                 }
-                "PROPPATCH" => webdav::handle_proppatch(&url_path),
+                "PROPPATCH" => {
+                    webdav::handle_proppatch(&url_path, body_bytes.as_deref())
+                }
                 "LOCK" => webdav::handle_lock(&url_path, headers.get("authorization").is_some()),
-                "UNLOCK" => StatusCode::NO_CONTENT.into_response(),
+                "UNLOCK" => webdav::handle_unlock(),
                 _ => StatusCode::METHOD_NOT_ALLOWED.into_response(),
             }
         }

@@ -6,6 +6,13 @@ use std::time::Duration;
 pub type UnmountCallback = Arc<dyn Fn() + Send + Sync>;
 pub type SetUnmountCallback = Arc<dyn Fn(UnmountCallback) + Send + Sync>;
 
+fn recover_lock<T>(r: std::sync::LockResult<std::sync::MutexGuard<'_, T>>) -> std::sync::MutexGuard<'_, T> {
+    r.unwrap_or_else(|e| {
+        tracing::warn!("Recovering from poisoned internal lock");
+        e.into_inner()
+    })
+}
+
 use serde::Serialize;
 use tokio::sync::broadcast;
 
@@ -119,33 +126,28 @@ impl<B: StorageBackend> FuseAdapter<B> {
     /// the slot is kept for a future check.
     fn try_collect_prefetch(&self, fh: u64, offset: u64, size: u32) -> Option<Vec<u8>> {
         let slot = {
-            let mut slots = self.prefetch.lock().expect("internal lock");
+            let mut slots = recover_lock(self.prefetch.lock());
             slots.remove(&fh)?
         };
 
         // Non-blocking: check if the prefetch task wrote its result
-        let guard = slot.result.lock().expect("internal lock");
-        match &*guard {
+        // Use mem::take to take ownership instead of cloning up to 16 MB.
+        let mut guard = recover_lock(slot.result.lock());
+        match std::mem::take(&mut *guard) {
             Some((prefetch_offset, data)) if !data.is_empty() => {
-                let prefetch_offset = *prefetch_offset;
-                let data = data.clone();
                 drop(guard); // release lock before writing to read_cache
                 tracing::debug!(
                     "[prefetch] collected {} bytes at offset {prefetch_offset} for fh={fh}",
                     data.len(),
                 );
                 self.handles.set_read_cache(fh, data, prefetch_offset);
-                // Cache is now populated; the main read() path will find it via read_from_cache.
-                // No need to re-insert slot — the data lives in the read_cache.
                 self.handles.read_from_cache(fh, offset, size)
             }
             Some(_) => None, // completed but empty — discard slot
             None => {
                 // Not ready yet — put slot back
                 drop(guard);
-                self.prefetch
-                    .lock()
-                    .expect("internal lock")
+                recover_lock(self.prefetch.lock())
                     .insert(fh, slot);
                 None
             }
@@ -180,14 +182,14 @@ impl<B: StorageBackend> FuseAdapter<B> {
 
         // Don't double-prefetch
         {
-            let slots = self.prefetch.lock().expect("internal lock");
+            let slots = recover_lock(self.prefetch.lock());
             if slots.contains_key(&fh) {
                 return;
             }
         }
 
         let next_offset = cache_start + cache_len as u64;
-        let bw = self.bandwidth.lock().expect("internal lock");
+        let bw = recover_lock(self.bandwidth.lock());
         let prefetch_size = bw.prefetch_size(5.0, u64::MAX);
         drop(bw);
 
@@ -219,25 +221,23 @@ impl<B: StorageBackend> FuseAdapter<B> {
                         None
                     }
                 };
-            *result_clone.lock().expect("internal lock") = prefetch_result;
+            *recover_lock(result_clone.lock()) = prefetch_result;
         });
 
-        self.prefetch
-            .lock()
-            .expect("internal lock")
+        recover_lock(self.prefetch.lock())
             .insert(fh, PrefetchSlot { result, _handle });
     }
 
     /// Abort any pending prefetch for a file handle.
     fn abort_prefetch(&self, fh: u64) {
-        if let Some(slot) = self.prefetch.lock().expect("internal lock").remove(&fh) {
+        if let Some(slot) = recover_lock(self.prefetch.lock()).remove(&fh) {
             slot._handle.abort();
         }
     }
 
     /// Abort all pending prefetch tasks. Called during shutdown.
     pub fn abort_all_prefetch(&self) {
-        let mut slots = self.prefetch.lock().expect("internal lock");
+        let mut slots = recover_lock(self.prefetch.lock());
         let count = slots.len();
         for (_, slot) in slots.drain() {
             slot._handle.abort();
@@ -362,9 +362,7 @@ impl<B: StorageBackend> FuseAdapter<B> {
             } else {
                 u64::MAX // Unknown size: don't constrain prefetch
             };
-            self.bandwidth
-                .lock()
-                .unwrap()
+            recover_lock(self.bandwidth.lock())
                 .prefetch_size(pipeline_secs, remaining)
                 .max(size)
         };
@@ -375,17 +373,20 @@ impl<B: StorageBackend> FuseAdapter<B> {
 
         // Record bandwidth observation
         if !data.is_empty() {
-            self.bandwidth
-                .lock()
-                .expect("internal lock")
+            recover_lock(self.bandwidth.lock())
                 .observe(data.len() as u64, elapsed);
-            self.handles.set_read_cache(fh, data.clone(), offset);
         }
 
+        // Split data: full prefetch goes to cache, caller gets only requested slice.
+        // Avoids cloning the full prefetch when caller needs less (common for sequential reads).
         let result = if data.len() > size as usize {
-            data[..size as usize].to_vec()
+            let result = data[..size as usize].to_vec();
+            self.handles.set_read_cache(fh, data, offset);
+            result
         } else {
-            data
+            let result = data;
+            self.handles.set_read_cache(fh, result.clone(), offset);
+            result
         };
 
         // If sequential, start background prefetch for the next chunk
@@ -394,7 +395,7 @@ impl<B: StorageBackend> FuseAdapter<B> {
         }
 
         self.emit(MountEvent::FileRead {
-            path: path.into(),
+            path: (&*path).into(),
             bytes: result.len() as u64,
             duration_ms: elapsed.as_millis() as u64,
         });
@@ -433,7 +434,7 @@ impl<B: StorageBackend> FuseAdapter<B> {
             self.cache.invalidate(&path).await;
             self.cache.invalidate_parent(&path).await;
             self.emit(MountEvent::FileWritten {
-                path: path.into(),
+                path: (&*path).into(),
                 bytes,
                 duration_ms: 0,
             });
@@ -553,7 +554,7 @@ impl<B: StorageBackend> MountEngine<B> {
     }
 
     pub fn status(&self) -> MountStatus {
-        self.status.lock().expect("internal lock").clone()
+        recover_lock(self.status.lock()).clone()
     }
     pub fn mountpoint(&self) -> &Path {
         &self.config.mountpoint
@@ -570,7 +571,7 @@ impl<B: StorageBackend> MountEngine<B> {
             event_tx,
         } = self;
         let backend = backend.expect("mount() called on consumed engine");
-        *status.lock().expect("internal lock") = MountStatus::Mounting;
+        *recover_lock(status.lock()) = MountStatus::Mounting;
         event_tx
             .send(MountEvent::MountStarted {
                 mountpoint: config.mountpoint.clone(),
@@ -615,25 +616,23 @@ impl MockBackend {
     }
 
     pub fn set_write_fails(&self, v: bool) {
-        *self.write_fails.lock().expect("internal lock") = v;
+        *recover_lock(self.write_fails.lock()) = v;
     }
 
     pub fn add_file(&self, path: &str, name: &str, size: u64, data: &[u8]) {
-        self.entries.lock().expect("internal lock").push(Entry {
+        recover_lock(self.entries.lock()).push(Entry {
             path: path.to_string(),
             name: name.to_string(),
             dir: false,
             size,
             mtime: std::time::SystemTime::UNIX_EPOCH,
         });
-        self.content
-            .lock()
-            .unwrap()
+        recover_lock(self.content.lock())
             .push((path.to_string(), data.to_vec()));
     }
 
     pub fn add_dir(&self, path: &str, name: &str) {
-        self.entries.lock().expect("internal lock").push(Entry {
+        recover_lock(self.entries.lock()).push(Entry {
             path: path.to_string(),
             name: name.to_string(),
             dir: true,
@@ -654,7 +653,7 @@ impl StorageBackend for MockBackend {
     }
 
     async fn list(&self, path: &str) -> Result<Vec<Entry>, BackendError> {
-        let entries = self.entries.lock().expect("internal lock");
+        let entries = recover_lock(self.entries.lock());
         let parent = path.trim_end_matches('/');
         let children: Vec<Entry> = entries
             .iter()
@@ -678,7 +677,7 @@ impl StorageBackend for MockBackend {
     async fn stat(&self, path: &str) -> Result<Entry, BackendError> {
         self.entries
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .iter()
             .find(|e| e.path == path)
             .cloned()
@@ -686,7 +685,7 @@ impl StorageBackend for MockBackend {
     }
 
     async fn read(&self, path: &str, offset: u64, size: u32) -> Result<Vec<u8>, BackendError> {
-        let content = self.content.lock().expect("internal lock");
+        let content = recover_lock(self.content.lock());
         let data = content
             .iter()
             .find(|(p, _)| p == path)
@@ -701,18 +700,18 @@ impl StorageBackend for MockBackend {
     }
 
     async fn write(&self, path: &str, data: &[u8]) -> Result<(), BackendError> {
-        if *self.write_fails.lock().expect("internal lock") {
+        if *recover_lock(self.write_fails.lock()) {
             return Err(BackendError::ConnectionFailed(
                 "mock write failure".to_string(),
             ));
         }
-        let mut content = self.content.lock().expect("internal lock");
+        let mut content = recover_lock(self.content.lock());
         if let Some(entry) = content.iter_mut().find(|(p, _)| p == path) {
             entry.1 = data.to_vec();
         } else {
             content.push((path.to_string(), data.to_vec()));
         }
-        let mut entries = self.entries.lock().expect("internal lock");
+        let mut entries = recover_lock(self.entries.lock());
         if let Some(entry) = entries.iter_mut().find(|e| e.path == path) {
             entry.size = data.len() as u64;
         } else {
@@ -735,7 +734,7 @@ impl StorageBackend for MockBackend {
             .next()
             .unwrap_or(path)
             .to_string();
-        self.entries.lock().expect("internal lock").push(Entry {
+        recover_lock(self.entries.lock()).push(Entry {
             path: path.to_string(),
             name,
             dir: true,
@@ -746,24 +745,20 @@ impl StorageBackend for MockBackend {
     }
 
     async fn delete(&self, path: &str) -> Result<(), BackendError> {
-        self.entries
-            .lock()
-            .expect("internal lock")
+        recover_lock(self.entries.lock())
             .retain(|e| e.path != path);
-        self.content
-            .lock()
-            .expect("internal lock")
+        recover_lock(self.content.lock())
             .retain(|(p, _)| p != path);
         Ok(())
     }
 
     async fn rename(&self, from: &str, to: &str) -> Result<(), BackendError> {
-        let mut entries = self.entries.lock().expect("internal lock");
+        let mut entries = recover_lock(self.entries.lock());
         if let Some(entry) = entries.iter_mut().find(|e| e.path == from) {
             entry.path = to.to_string();
             entry.name = to.rsplit('/').next().unwrap_or(to).to_string();
         }
-        let mut content = self.content.lock().expect("internal lock");
+        let mut content = recover_lock(self.content.lock());
         if let Some(item) = content.iter_mut().find(|(p, _)| p == from) {
             item.0 = to.to_string();
         }
