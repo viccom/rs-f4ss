@@ -980,11 +980,15 @@ a{ color: inherit; text-decoration: none; }
     const badge = isDir ? 'DIR' : (e.ext || e.kind || 'FILE').toUpperCase().slice(0, 4);
     const kind = isDir ? 'folder' : e.kind;
     const meta = isDir ? '—' : (fmtSize(e.size) + (e.mtime ? ' <span class="dot"></span> ' + esc(fmtTime(e.mtime)) : ''));
+    const previewBtn = (!isDir && isPreviewable(kind))
+      ? '<button class="preview" aria-label="预览" title="预览"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>'
+      : '';
     return '<article class="tile' + (isDir ? ' is-folder' : '') + '" tabindex="0" role="button" aria-label="' + esc(e.name + (isDir ? ' 文件夹' : ' 文件')) + '" data-name="' + esc(e.name) + '" data-kind="' + esc(kind) + '" data-href="' + esc(e.href) + '" data-idx="' + idx + '" style="animation-delay:' + Math.min(idx, 12) * 0.04 + 's">' +
       '<div class="tile-head"><span class="type-badge" data-t="' + esc(kind) + '">' + esc(badge) + '</span></div>' +
       '<div class="thumb"><div class="thumb-icon">' + iconForKind(kind, e.name) + '</div></div>' +
       '<div class="tile-foot"><div class="fname">' + esc(e.name) + '</div><div class="fmeta">' + meta + '</div></div>' +
       '<div class="tile-actions">' +
+        previewBtn +
         (isDir
           ? '<button class="enter" aria-label="进入" title="进入"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></button>'
           : '<button class="download" aria-label="下载" title="下载"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v14M5 10l7 7 7-7M5 21h14"/></svg></button>') +
@@ -995,6 +999,9 @@ a{ color: inherit; text-decoration: none; }
   function rowHTML(e) {
     const isDir = e.kind === 'folder';
     const kind = isDir ? 'folder' : e.kind;
+    const previewBtn = (!isDir && isPreviewable(kind))
+      ? '<button class="preview" aria-label="预览" title="预览"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>'
+      : '';
     return '<div class="row" tabindex="0" role="button" aria-label="' + esc(e.name + (isDir ? ' 文件夹' : ' 文件')) + '" data-name="' + esc(e.name) + '" data-kind="' + esc(kind) + '" data-href="' + esc(e.href) + '">' +
       '<span class="ic">' + iconForKind(kind, e.name) + '</span>' +
       '<span class="rname">' + esc(e.name) + '</span>' +
@@ -1002,6 +1009,7 @@ a{ color: inherit; text-decoration: none; }
       '<span class="rsize">' + esc(isDir ? '—' : fmtSize(e.size)) + '</span>' +
       '<span class="rdate">' + esc(fmtTime(e.mtime)) + '</span>' +
       '<span class="ractions">' +
+        previewBtn +
         (isDir
           ? '<button class="enter" aria-label="进入"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></button>'
           : '<button class="download" aria-label="下载"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v14M5 10l7 7 7-7M5 21h14"/></svg></button>') +
@@ -1518,6 +1526,11 @@ a{ color: inherit; text-decoration: none; }
         selectTile(t);
       });
       t.addEventListener('dblclick', function(){ activateTile(t); });
+      const prev = t.querySelector('.preview');
+      if (prev) prev.addEventListener('click', function(e){
+        e.stopPropagation();
+        openPreview(t);
+      });
       const enter = t.querySelector('.enter');
       if (enter) enter.addEventListener('click', function(e){ e.stopPropagation(); go(t.getAttribute('data-href')); });
       const dl = t.querySelector('.download');
@@ -1537,6 +1550,11 @@ a{ color: inherit; text-decoration: none; }
         selectTile(r);
       });
       r.addEventListener('dblclick', function(){ activateTile(r); });
+      const prev = r.querySelector('.preview');
+      if (prev) prev.addEventListener('click', function(e){
+        e.stopPropagation();
+        openPreview(r);
+      });
     });
   }
 
