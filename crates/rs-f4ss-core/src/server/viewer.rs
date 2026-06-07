@@ -12,7 +12,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use serde_json::json;
 
 use super::{EntryMeta, FileServerState};
 
@@ -28,7 +27,6 @@ struct EntryView {
     mtime_ts: u64,
     ext: String,
     href: String,
-    child_count: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -52,7 +50,7 @@ struct ViewerData<'a> {
 pub(crate) fn wants_viewer(headers: &axum::http::HeaderMap, query: Option<&str>) -> bool {
     if let Some(q) = query {
         for (k, v) in url_query_pairs(q) {
-            if k == "view" {
+            if k.eq_ignore_ascii_case("view") {
                 let v = v.to_ascii_lowercase();
                 if v == "ui" || v == "html" {
                     return true;
@@ -65,12 +63,31 @@ pub(crate) fn wants_viewer(headers: &axum::http::HeaderMap, query: Option<&str>)
     }
     if let Some(accept) = headers.get("accept").and_then(|v| v.to_str().ok()) {
         // Browsers send a long list; reqwest sends just "*/*".
-        // The presence of "text/html" is the strongest browser signal.
-        if accept
-            .split(',')
-            .any(|m| m.trim().to_ascii_lowercase().starts_with("text/html"))
-        {
-            return true;
+        // Per RFC 7231 §5.3.2, "Accept: text/html;q=0" explicitly rejects HTML,
+        // so we honour the q=0 sentinel rather than treating presence as consent.
+        for media_range in accept.split(',') {
+            let mut parts = media_range.split(';');
+            let mime = parts.next().unwrap_or("").trim().to_ascii_lowercase();
+            if !mime.starts_with("text/html") {
+                continue;
+            }
+            let mut rejected = false;
+            for param in parts {
+                let p = param.trim();
+                if let Some(q_str) = p
+                    .strip_prefix("q=")
+                    .or_else(|| p.strip_prefix("Q="))
+                {
+                    if let Ok(q) = q_str.trim().parse::<f32>() {
+                        if q == 0.0 {
+                            rejected = true;
+                        }
+                    }
+                }
+            }
+            if !rejected {
+                return true;
+            }
         }
     }
     false
@@ -91,7 +108,9 @@ pub(crate) fn render_viewer_html(
         read_only: state.read_only,
         entries: views,
     };
-    let json = serde_json::to_string(&data).unwrap_or_else(|_| json!({}).to_string());
+    let json = serde_json::to_string(&data)
+        .expect("EntryView is serializable (String/&'static str/u64 only); \
+                 this expect trips if a non-serializable field is added");
     // XSS guard: prevent any embedded </script> in the JSON from breaking out.
     let safe = json.replace("</", "<\\/");
     VIEWER_HTML.replace(
@@ -121,7 +140,6 @@ fn entry_view(e: &EntryMeta) -> EntryView {
         mtime_ts,
         ext: extension(&e.name).to_string(),
         href,
-        child_count: None,
     }
 }
 
@@ -174,7 +192,12 @@ fn urlencoding(s: &str) -> String {
 }
 
 fn format_iso8601(t: SystemTime) -> String {
-    let dur = t.duration_since(UNIX_EPOCH).unwrap_or_default();
+    // Pre-1970 timestamps would otherwise round-trip as "1970-01-01T00:00:00Z",
+    // which is misleading. Surface the absence instead.
+    let dur = match t.duration_since(UNIX_EPOCH) {
+        Ok(d) => d,
+        Err(_) => return String::new(),
+    };
     chrono::DateTime::from_timestamp(dur.as_secs() as i64, dur.subsec_nanos())
         .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
         .unwrap_or_default()
@@ -400,5 +423,164 @@ mod tests {
         assert_eq!(extension("a.b.c"), "c");
         assert_eq!(extension("README"), "");
         assert_eq!(extension(".hidden"), "");
+    }
+
+    // --- wants_viewer: query boundary & Accept q=0 (review fixes) ---
+
+    #[test]
+    fn test_wants_viewer_query_key_case_insensitive() {
+        let m = axum::http::HeaderMap::new();
+        // key match must be case-insensitive (parity with value lowercase)
+        assert!(wants_viewer(&m, Some("VIEW=ui")));
+        assert!(wants_viewer(&m, Some("View=html")));
+        assert!(!wants_viewer(&m, Some("View=raw")));
+    }
+
+    #[test]
+    fn test_wants_viewer_query_empty_value_falls_through() {
+        // ?view= (empty) doesn't trigger viewer or autoindex — fall through to Accept.
+        let m = hm_get("accept", "text/html");
+        assert!(wants_viewer(&m, Some("view=")));
+        let m = axum::http::HeaderMap::new();
+        assert!(!wants_viewer(&m, Some("view=")));
+    }
+
+    #[test]
+    fn test_wants_viewer_query_malformed_no_panic() {
+        let m = axum::http::HeaderMap::new();
+        // Bare &, unkeyed tokens, missing values — must not crash.
+        assert!(!wants_viewer(&m, Some("&")));
+        assert!(!wants_viewer(&m, Some("&&&")));
+        assert!(!wants_viewer(&m, Some("foo")));
+        assert!(!wants_viewer(&m, Some("=ui")));
+        assert!(!wants_viewer(&m, Some("view")));
+    }
+
+    #[test]
+    fn test_wants_viewer_query_repeated_key_first_wins() {
+        // First matching key wins (deterministic, even if unusual).
+        let m = axum::http::HeaderMap::new();
+        assert!(wants_viewer(&m, Some("view=ui&view=raw")));
+        assert!(!wants_viewer(&m, Some("view=raw&view=ui")));
+    }
+
+    #[test]
+    fn test_wants_viewer_accept_q0_explicit_reject() {
+        // RFC 7231 §5.3.2: "Accept: text/html;q=0" must NOT serve HTML.
+        let m = hm_get("accept", "text/html;q=0");
+        assert!(!wants_viewer(&m, None));
+    }
+
+    #[test]
+    fn test_wants_viewer_accept_q0_with_other_media() {
+        // Defensive P2P Accept like "text/html;q=0, */*;q=1" must not be served viewer.
+        let m = hm_get("accept", "text/html;q=0, */*;q=1");
+        assert!(!wants_viewer(&m, None));
+    }
+
+    #[test]
+    fn test_wants_viewer_accept_q_positive_values() {
+        let m = hm_get("accept", "text/html;q=0.5");
+        assert!(wants_viewer(&m, None));
+        let m = hm_get("accept", "text/html;q=1.0");
+        assert!(wants_viewer(&m, None));
+    }
+
+    #[test]
+    fn test_wants_viewer_accept_q_zero_among_others() {
+        // text/html;q=0 doesn't poison the *other* text/html entries.
+        // We only need ONE surviving positive match to serve viewer.
+        let m = hm_get("accept", "text/html;q=0, application/xhtml+xml, text/html");
+        assert!(wants_viewer(&m, None));
+    }
+
+    // --- classify: trailing-dot / empty / odd inputs (review fixes) ---
+
+    #[test]
+    fn test_classify_trailing_dot_and_empty() {
+        // "foo." has no real extension (extension() guards i+1<len).
+        assert_eq!(classify("foo.", false), "other");
+        // Empty filename → empty extension → "other".
+        assert_eq!(classify("", false), "other");
+    }
+
+    // --- urlencoding: critical separators (review fix) ---
+
+    #[test]
+    fn test_urlencoding_separators() {
+        // Query / path / fragment / form separators must be percent-encoded,
+        // otherwise a filename "a&b.txt" would corrupt the query string.
+        assert_eq!(urlencoding("a&b"), "a%26b");
+        assert_eq!(urlencoding("a?b"), "a%3Fb");
+        assert_eq!(urlencoding("a#b"), "a%23b");
+        assert_eq!(urlencoding("a=b"), "a%3Db");
+        assert_eq!(urlencoding("a+b"), "a%2Bb");
+        assert_eq!(urlencoding("a/b"), "a%2Fb");
+    }
+
+    // --- render: empty entries + XSS vectors beyond </script> (review fixes) ---
+
+    #[test]
+    fn test_render_viewer_empty_entries_array() {
+        let s = state(false);
+        let html = render_viewer_html(&s, &[], "/");
+        // Lock the "empty list" shape — guards against accidental single-null collapse.
+        assert!(html.contains("\"entries\":[]"));
+    }
+
+    #[test]
+    fn test_render_viewer_xss_full_script_payload() {
+        // <script>alert(1)</script> in a name — the embedded </ must be escaped
+        // even though the surrounding < and > survive (JSON handles them safely
+        // as long as the </ sequence never appears in the value).
+        let entries = vec![entry("<script>alert(1)</script>", false, 1)];
+        let s = state(false);
+        let html = render_viewer_html(&s, &entries, "/");
+        let marker = "window.__DATA__ = ";
+        let data_start = html.find(marker).unwrap() + marker.len();
+        let data_end = html[data_start..].find(';').unwrap() + data_start;
+        let json_value = &html[data_start..data_end];
+        assert!(!json_value.contains("</script>"));
+        assert!(html.contains("<\\/script>"));
+    }
+
+    #[test]
+    fn test_render_viewer_xss_svg_onload() {
+        // Attribute-style injection via filename; same </ guard applies.
+        let entries = vec![entry("a</style><img onerror=alert(1) src=x>", false, 1)];
+        let s = state(false);
+        let html = render_viewer_html(&s, &entries, "/");
+        let marker = "window.__DATA__ = ";
+        let data_start = html.find(marker).unwrap() + marker.len();
+        let data_end = html[data_start..].find(';').unwrap() + data_start;
+        let json_value = &html[data_start..data_end];
+        assert!(!json_value.contains("</style>"));
+        assert!(html.contains("<\\/style>"));
+    }
+
+    // --- format_iso8601 / url_query_pairs: direct coverage (review fixes) ---
+
+    #[test]
+    fn test_format_iso8601_known() {
+        // 1749103800 → 2025-06-05T06:10:00Z
+        assert_eq!(format_iso8601(UNIX_EPOCH + Duration::from_secs(1749103800)),
+                   "2025-06-05T06:10:00Z");
+    }
+
+    #[test]
+    fn test_format_iso8601_pre_epoch_is_empty() {
+        // Pre-1970 timestamp: duration_since returns Err, expect empty string.
+        let t = std::time::SystemTime::UNIX_EPOCH - Duration::from_secs(60);
+        assert_eq!(format_iso8601(t), "");
+    }
+
+    #[test]
+    fn test_url_query_pairs_basic() {
+        let pairs: Vec<_> = url_query_pairs("a=1&b=2&c").collect();
+        assert_eq!(pairs, vec![
+            ("a".to_string(), "1".to_string()),
+            ("b".to_string(), "2".to_string()),
+            ("c".to_string(), "".to_string()),
+        ]);
     }
 }

@@ -52,7 +52,10 @@ async fn handle_get_dir(
 ) -> Response {
     let entries = match state.list_dir(local_path).await {
         Ok(e) => e,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(e) => {
+            tracing::error!("list_dir {}: {e}", local_path.display());
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     };
 
     // Dispatch: browser visitor → embedded SPA; rs-f4ss / curl / etc → autoindex.

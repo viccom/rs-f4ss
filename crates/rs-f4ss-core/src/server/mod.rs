@@ -292,7 +292,12 @@ impl FileServerState {
 
             let meta = match entry.metadata().await {
                 Ok(m) => m,
-                Err(_) => continue,
+                Err(e) => {
+                    // TOCTOU: file was removed/renamed between readdir and stat.
+                    // Skip silently at INFO; DEBUG leaves a breadcrumb for the curious.
+                    tracing::debug!("stat {}: {e}", entry.path().display());
+                    continue;
+                }
             };
 
             if !meta.is_file() && !meta.is_dir() {
@@ -434,7 +439,9 @@ pub(crate) async fn write_body_to_file(
     {
         total += chunk.len() as u64;
         if total > MAX_UPLOAD_SIZE {
-            let _ = tokio::fs::remove_file(path).await;
+            if let Err(e) = tokio::fs::remove_file(path).await {
+                tracing::warn!("413 cleanup remove {}: {e}", path.display());
+            }
             return Err(StatusCode::PAYLOAD_TOO_LARGE.into_response());
         }
         file.write_all(&chunk).await.map_err(|e| {

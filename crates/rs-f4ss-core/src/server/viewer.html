@@ -5,9 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>rs-f4ss · 文件库</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT@9..144,300..800,0..100&family=Geist:wght@300..700&family=Geist+Mono:wght@400..600&display=swap" rel="stylesheet">
+<!-- Self-contained: relies on system serif/sans/mono via the --font-* tokens below. -->
 
 <style>
 /* ──────────────────────────────────────────────────────────
@@ -1027,26 +1025,46 @@ a{ color: inherit; text-decoration: none; }
   });
   async function uploadFiles(files) {
     if (readOnly) return;
-    let ok = 0, fail = 0;
+    const results = []; // {name, ok, status}
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
       try {
         const u = new URL((path === '/' ? '' : path) + '/' + encodeURIComponent(f.name), window.location.origin);
         const res = await fetch(u.toString(), { method: 'PUT', body: f });
-        if (res.ok) ok++; else fail++;
-      } catch (_) { fail++; }
+        results.push({ name: f.name, ok: res.ok, status: res.status });
+      } catch (e) {
+        results.push({ name: f.name, ok: false, status: 0, err: e });
+      }
     }
-    if (ok) toast('已上传 ' + ok + ' 个文件' + (fail ? ',' + fail + ' 个失败' : ''));
-    else toast('上传失败');
-    if (ok) setTimeout(function(){ window.location.reload(); }, 600);
+    const ok = results.filter(function(r){ return r.ok; }).length;
+    const failed = results.filter(function(r){ return !r.ok; });
+    if (ok && !failed.length) {
+      toast('已上传 ' + ok + ' 个文件');
+      setTimeout(function(){ window.location.reload(); }, 600);
+    } else if (ok && failed.length) {
+      const first = failed[0];
+      toast('已上传 ' + ok + ' 个，' + failed.length + ' 个失败：' + first.name +
+            (first.status ? ' ' + httpStatusText(first.status, '失败') : ' 网络错误'));
+      console.warn('upload failures', failed);
+    } else {
+      const first = failed[0] || {};
+      toast('上传失败：' + (first.status ? httpStatusText(first.status, '') : '网络中断'));
+      console.warn('upload failures', failed);
+    }
   }
   async function del(entry) {
     if (readOnly) return;
     if (!confirm('确认删除 "' + entry.name + '"?' + (entry.kind === 'folder' ? '\n目录及其内容将一并删除。' : ''))) return;
     const u = new URL(entry.href, window.location.origin);
-    const res = await fetch(u.toString(), { method: 'DELETE' });
+    let res;
+    try {
+      res = await fetch(u.toString(), { method: 'DELETE' });
+    } catch (e) {
+      toast(netErrMsg('删除'));
+      return;
+    }
     if (res.ok || res.status === 204) { toast('已删除 ' + entry.name); setTimeout(function(){ window.location.reload(); }, 500); }
-    else toast('删除失败 (' + res.status + ')');
+    else toast(httpStatusText(res.status, '删除失败'));
   }
   document.getElementById('newFolderBtn').addEventListener('click', async function(){
     if (readOnly) { toast('当前为只读模式'); return; }
@@ -1054,9 +1072,15 @@ a{ color: inherit; text-decoration: none; }
     if (!name) return;
     if (!/^[^/\x00]{1,255}$/.test(name)) { toast('名称非法'); return; }
     const u = new URL((path === '/' ? '' : path) + '/' + encodeURIComponent(name) + '/', window.location.origin);
-    const res = await fetch(u.toString(), { method: 'MKCOL' });
+    let res;
+    try {
+      res = await fetch(u.toString(), { method: 'MKCOL' });
+    } catch (e) {
+      toast(netErrMsg('创建'));
+      return;
+    }
     if (res.ok) { toast('已创建 ' + name); setTimeout(function(){ window.location.reload(); }, 500); }
-    else toast('创建失败 (' + res.status + ')');
+    else toast(httpStatusText(res.status, '创建失败'));
   });
 
   // ---------- 拖放 ----------
@@ -1094,6 +1118,26 @@ a{ color: inherit; text-decoration: none; }
     clearTimeout(toastTimer);
     toastTimer = setTimeout(function(){ toastEl.classList.remove('show'); }, 2400);
   }
+  // Translate HTTP status codes to user-readable Chinese messages.
+  function httpStatusText(status, fallback) {
+    if (status === 401 || status === 403) return '需要登录或权限不足';
+    if (status === 404) return '目标不存在';
+    if (status === 409) return '目标已存在';
+    if (status === 413) return '文件超过 2 GB 上限';
+    if (status === 416) return '读取范围越界';
+    if (status === 423) return '目标被锁定';
+    if (status === 507) return '服务器空间不足';
+    if (status >= 500) return '服务器错误 (' + status + ')';
+    return fallback + ' (' + status + ')';
+  }
+  // Network/offline failure message (used in catch branches).
+  function netErrMsg(action) { return action + '失败：网络中断或服务不可用'; }
+
+  // Last-line-of-defence: surface any unhandled promise rejection as a toast.
+  window.addEventListener('unhandledrejection', function(e){
+    console.error('unhandledrejection', e.reason);
+    toast('操作未完成：' + (e.reason && e.reason.message ? e.reason.message : '未知错误'));
+  });
 
   // ---------- 复制链接 ----------
   document.getElementById('copyLinkBtn').addEventListener('click', function(){
