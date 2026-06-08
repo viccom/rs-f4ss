@@ -98,6 +98,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install WinFsp
         run: choco install winfsp --no-progress
+      - name: Add WinFsp to PATH
+        run: echo "C:\Program Files\WinFsp\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: Run tests
         run: cargo test --all-features
         env:
@@ -152,6 +154,9 @@ jobs:
       - name: Install WinFsp (Windows)
         if: runner.os == 'Windows'
         run: choco install winfsp --no-progress
+      - name: Add WinFsp to PATH (Windows)
+        if: runner.os == 'Windows'
+        run: echo "C:\Program Files\WinFsp\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
       - name: cargo build
         shell: bash
         run: |
@@ -160,9 +165,9 @@ jobs:
             ARGS+=(--target "${{ matrix.target }}")
           fi
           if [ "${{ matrix.features }}" = "" ]; then
-            cargo "${ARGS[@]}" build
+            cargo build "${ARGS[@]}"
           else
-            cargo "${ARGS[@]}" build --no-default-features --features "${{ matrix.features }}"
+            cargo build --no-default-features --features "${{ matrix.features }}" "${ARGS[@]}"
           fi
 
   # ─────────────────────────────────────────────────────────────────────
@@ -177,7 +182,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install dufs (test server)
-        run: cargo install dufs --version 0.43.0 --locked --root /usr/local
+        run: |
+          curl -fsSL "https://github.com/sigoden/dufs/releases/download/v0.43.0/dufs-v0.43.0-x86_64-unknown-linux-musl.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin dufs
+          dufs --version
       - name: Install Linux system dependencies
         run: |
           sudo apt-get update
