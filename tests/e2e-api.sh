@@ -739,31 +739,45 @@ phase4_errors() {
         fail "Expected 409, got $code"
     fi
 
-    # Start with unreachable backend
+    # Start with unreachable backend — use a non-existent mountpoint so the
+    # FUSE mount itself fails fast. (Updating the URL alone does not cause
+    # the mount thread to report Error, because FUSE does not eagerly
+    # connect to the backend — backend connectivity is only checked lazily
+    # on lookup/read. A missing mountpoint, by contrast, makes the FUSE
+    # mount() syscall return ENOENT, which the mount thread reports as
+    # MountState::Error.)
     run_test "Start with unreachable backend"
-    # Update URL to unreachable port
-    api PUT /api/mounts/err-test -H 'Content-Type: application/json' -d '{
-        "url": "http://127.0.0.1:19999"
-    }' >/dev/null
-    mkdir -p "/tmp/dufs-api-test-err" 2>/dev/null || true
+    # Use a path under /tmp that is guaranteed not to exist
+    local bad_mp="/tmp/dufs-api-test-err-no-such-dir-$$"
+    api PUT /api/mounts/err-test -H 'Content-Type: application/json' -d "{
+        \"url\": \"http://127.0.0.1:19999\",
+        \"mountpoint\": \"$bad_mp\"
+    }" >/dev/null
     code=$(api_code POST /api/mounts/err-test/start)
     if [ "$code" = "502" ] || [ "$code" = "409" ]; then
         pass "Unreachable backend returns $code"
     else
-        # May return 200 if connectivity check timing differs
-        body=$(api GET /api/mounts/err-test)
-        local state
-        state=$(echo "$body" | jq -r '.state')
+        # start is async — poll for Error state up to 5s
+        state=""
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            body=$(api GET /api/mounts/err-test)
+            state=$(echo "$body" | jq -r '.state')
+            if [ "$state" = "Error" ]; then
+                break
+            fi
+            sleep 0.5
+        done
         if [ "$state" = "Error" ]; then
-            pass "Unreachable backend: state=Error"
+            pass "Unreachable backend: state=Error (HTTP=$code)"
         else
             fail "Unreachable backend: HTTP=$code state=$state"
         fi
     fi
 
-    # Reset to working URL for further tests
+    # Reset to a working URL + existing mountpoint for further tests
     api PUT /api/mounts/err-test -H 'Content-Type: application/json' -d "{
-        \"url\": \"http://127.0.0.1:$DUFS_PORT\"
+        \"url\": \"http://127.0.0.1:$DUFS_PORT\",
+        \"mountpoint\": \"/tmp/dufs-api-test-err\"
     }" >/dev/null
 
     # Create with missing required fields
