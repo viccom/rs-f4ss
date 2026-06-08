@@ -63,30 +63,32 @@ pub fn map_mount_error(err: &MountError) -> Errno {
 const TTL: Duration = Duration::from_secs(60);
 
 #[cfg(target_os = "linux")]
-fn entry_to_file_attr(entry: &Entry, ino: u64) -> FileAttr {
-    let kind = if entry.dir {
-        FileType::Directory
-    } else {
-        FileType::RegularFile
-    };
-    let perm: u16 = if entry.dir { 0o755 } else { 0o644 };
-    let nlink: u32 = if entry.dir { 2 } else { 1 };
-    FileAttr {
-        ino: INodeNo(ino),
-        size: entry.size,
-        blocks: entry.size.div_ceil(512),
-        atime: entry.mtime,
-        mtime: entry.mtime,
-        ctime: entry.mtime,
-        crtime: entry.mtime,
-        kind,
-        perm,
-        nlink,
-        uid: 0,
-        gid: 0,
-        rdev: 0,
-        blksize: 1 << 20, // 1 MB — optimal for network FS I/O batching
-        flags: 0,
+impl<B: StorageBackend> FuseAdapter<B> {
+    fn entry_to_file_attr(&self, entry: &Entry, ino: u64) -> FileAttr {
+        let kind = if entry.dir {
+            FileType::Directory
+        } else {
+            FileType::RegularFile
+        };
+        let perm: u16 = if entry.dir { 0o755 } else { 0o644 };
+        let nlink: u32 = if entry.dir { 2 } else { 1 };
+        FileAttr {
+            ino: INodeNo(ino),
+            size: entry.size,
+            blocks: entry.size.div_ceil(512),
+            atime: entry.mtime,
+            mtime: entry.mtime,
+            ctime: entry.mtime,
+            crtime: entry.mtime,
+            kind,
+            perm,
+            nlink,
+            uid: self.mount_uid,
+            gid: self.mount_gid,
+            rdev: 0,
+            blksize: 1 << 20, // 1 MB — optimal for network FS I/O batching
+            flags: 0,
+        }
     }
 }
 
@@ -141,7 +143,7 @@ impl<B: StorageBackend> Filesystem for FuseAdapter<B> {
                         NodeKind::File
                     };
                     let ino = inodes.get_or_insert(&child_path, kind);
-                    reply.entry(&TTL, &entry_to_file_attr(&entry, ino), Generation(0));
+                    reply.entry(&TTL, &self.entry_to_file_attr(&entry, ino), Generation(0));
                 }
                 Err(e) => reply.error(map_mount_error(&e)),
             }
@@ -164,7 +166,7 @@ impl<B: StorageBackend> Filesystem for FuseAdapter<B> {
 
         self.block_on(async move {
             match self.getattr(&path_str).await {
-                Ok(entry) => reply.attr(&TTL, &entry_to_file_attr(&entry, ino.0)),
+                Ok(entry) => reply.attr(&TTL, &self.entry_to_file_attr(&entry, ino.0)),
                 Err(e) => reply.error(map_mount_error(&e)),
             }
         });
@@ -228,7 +230,7 @@ impl<B: StorageBackend> Filesystem for FuseAdapter<B> {
                 self.cache.invalidate(&path_str).await;
             }
             match self.getattr(&path_str).await {
-                Ok(entry) => reply.attr(&TTL, &entry_to_file_attr(&entry, ino.0)),
+                Ok(entry) => reply.attr(&TTL, &self.entry_to_file_attr(&entry, ino.0)),
                 Err(e) => reply.error(map_mount_error(&e)),
             }
         });
@@ -449,8 +451,8 @@ impl<B: StorageBackend> Filesystem for FuseAdapter<B> {
                         kind: FileType::Directory,
                         perm: 0o755,
                         nlink: 2,
-                        uid: 0,
-                        gid: 0,
+                        uid: self.mount_uid,
+                        gid: self.mount_gid,
                         rdev: 0,
                         blksize: 1 << 20,
                         flags: 0,
@@ -484,7 +486,7 @@ impl<B: StorageBackend> Filesystem for FuseAdapter<B> {
                                 NodeKind::File
                             };
                             let child_ino = inodes.get_or_insert(&child_path, kind);
-                            let attr = entry_to_file_attr(entry, child_ino);
+                            let attr = self.entry_to_file_attr(entry, child_ino);
                             reply.add(
                                 INodeNo(child_ino),
                                 idx,
@@ -541,8 +543,8 @@ impl<B: StorageBackend> Filesystem for FuseAdapter<B> {
                         kind: FileType::Directory,
                         perm: 0o755,
                         nlink: 2,
-                        uid: 0,
-                        gid: 0,
+                        uid: self.mount_uid,
+                        gid: self.mount_gid,
                         rdev: 0,
                         blksize: 1 << 20, // 1 MB — optimal for network FS I/O batching
                         flags: 0,
@@ -695,8 +697,8 @@ impl<B: StorageBackend> Filesystem for FuseAdapter<B> {
                         kind: FileType::RegularFile,
                         perm: 0o644,
                         nlink: 1,
-                        uid: 0,
-                        gid: 0,
+                        uid: self.mount_uid,
+                        gid: self.mount_gid,
                         rdev: 0,
                         blksize: 1 << 20, // 1 MB — optimal for network FS I/O batching
                         flags: 0,
@@ -779,11 +781,14 @@ mod tests {
             size: 1024,
             mtime: SystemTime::UNIX_EPOCH,
         };
-        let attr = entry_to_file_attr(&entry, 42);
+        let adapter = test_adapter();
+        let attr = adapter.entry_to_file_attr(&entry, 42);
         assert_eq!(attr.ino, INodeNo(42));
         assert_eq!(attr.size, 1024);
         assert_eq!(attr.kind, FileType::RegularFile);
         assert_eq!(attr.perm, 0o644);
+        assert_eq!(attr.uid, 1000);
+        assert_eq!(attr.gid, 1000);
     }
 
     #[test]
@@ -795,10 +800,28 @@ mod tests {
             size: 0,
             mtime: SystemTime::UNIX_EPOCH,
         };
-        let attr = entry_to_file_attr(&entry, 7);
+        let adapter = test_adapter();
+        let attr = adapter.entry_to_file_attr(&entry, 7);
         assert_eq!(attr.kind, FileType::Directory);
         assert_eq!(attr.perm, 0o755);
         assert_eq!(attr.nlink, 2);
+        assert_eq!(attr.uid, 1000);
+    }
+
+    fn test_adapter() -> FuseAdapter<crate::mount::MockBackend> {
+        let backend = crate::mount::MockBackend::new();
+        let config = crate::mount::MountConfig {
+            mountpoint: std::path::PathBuf::from("/mnt/test"),
+            read_only: false,
+            cache_ttl: std::time::Duration::from_secs(60),
+            cache_size: 100,
+            allow_other: false,
+            mount_uid: 1000,
+            mount_gid: 1000,
+            on_mount_ready: None,
+            on_set_unmount: None,
+        };
+        FuseAdapter::new(backend, &config)
     }
 
     #[test]

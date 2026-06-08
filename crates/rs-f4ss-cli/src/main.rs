@@ -494,6 +494,14 @@ fn run_with_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         cache_ttl: Duration::from_secs(cli.cache_ttl),
         cache_size: cli.cache_size,
         allow_other: cli.allow_other,
+        #[cfg(unix)]
+        mount_uid: unsafe { libc::getuid() },
+        #[cfg(unix)]
+        mount_gid: unsafe { libc::getgid() },
+        #[cfg(not(unix))]
+        mount_uid: 0,
+        #[cfg(not(unix))]
+        mount_gid: 0,
         on_mount_ready: None,
         #[cfg(target_os = "windows")]
         on_set_unmount: Some(Arc::new(move |cb| {

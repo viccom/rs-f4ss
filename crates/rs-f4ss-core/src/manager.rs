@@ -272,6 +272,8 @@ impl MountManager {
                     cache_ttl: std::time::Duration::from_secs(entry.cache_ttl_secs),
                     cache_size: entry.cache_size,
                     allow_other: false,
+                    mount_uid: unsafe { libc::getuid() },
+                    mount_gid: unsafe { libc::getgid() },
                     on_mount_ready: Some(Arc::new(move || {
                         *ms_ready.lock().unwrap() = MountState::Running;
                     })),

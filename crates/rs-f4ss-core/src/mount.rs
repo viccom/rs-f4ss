@@ -83,6 +83,8 @@ pub struct FuseAdapter<B: StorageBackend> {
     pub(crate) handles: HandleTable,
     pub(crate) inodes: Arc<InodeMap>,
     pub(crate) read_only: bool,
+    pub(crate) mount_uid: u32,
+    pub(crate) mount_gid: u32,
     event_tx: broadcast::Sender<MountEvent>,
     pub(crate) rt: tokio::runtime::Runtime,
     bandwidth: std::sync::Mutex<BandwidthEstimator>,
@@ -103,6 +105,8 @@ impl<B: StorageBackend> FuseAdapter<B> {
             handles: HandleTable::new(),
             inodes: Arc::new(InodeMap::new(PathBuf::from("/"))),
             read_only: config.read_only,
+            mount_uid: config.mount_uid,
+            mount_gid: config.mount_gid,
             event_tx,
             rt,
             bandwidth: std::sync::Mutex::new(BandwidthEstimator::new()),
@@ -513,6 +517,12 @@ pub struct MountConfig {
     pub cache_ttl: Duration,
     pub cache_size: usize,
     pub allow_other: bool,
+    /// Mount process uid — used as the owner of every FUSE file attr so the
+    /// kernel (when `DefaultPermissions` is on) can grant the caller's perms.
+    /// Populated automatically from `libc::getuid()` by `MountEngine::new`.
+    pub mount_uid: u32,
+    /// Mount process gid — see `mount_uid`.
+    pub mount_gid: u32,
     pub on_mount_ready: Option<UnmountCallback>,
     pub on_set_unmount: Option<SetUnmountCallback>,
 }
@@ -777,6 +787,8 @@ mod tests {
             cache_ttl: Duration::from_secs(60),
             cache_size: 100,
             allow_other: false,
+            mount_uid: 0,
+            mount_gid: 0,
             on_mount_ready: None,
             on_set_unmount: None,
         }
@@ -789,6 +801,8 @@ mod tests {
             cache_ttl: Duration::from_secs(60),
             cache_size: 100,
             allow_other: false,
+            mount_uid: 0,
+            mount_gid: 0,
             on_mount_ready: None,
             on_set_unmount: None,
         }
