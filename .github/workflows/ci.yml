@@ -97,26 +97,39 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install WinFsp
-        run: choco install winfsp --no-progress
+        # The Chocolatey `winfsp` package bundles a stripped MSI that installs
+        # files only into a SxS directory under C:\Program Files\WinFsp\DYNAMIC,
+        # which makes the user-mode DLL loader unable to find winfsp-x64.dll
+        # for cargo's per-test binaries. Download the official WinFsp MSI from
+        # GitHub Releases and run a full silent install — it puts DLLs in
+        # C:\Program Files\WinFsp\bin\ and registers a WinFsp Launcher service
+        # that the integration tests need anyway.
+        run: |
+          $url = "https://github.com/winfsp/winfsp/releases/download/v2.0/winfsp-2.0.23075.msi"
+          $msi = "$env:TEMP\winfsp.msi"
+          Write-Host "Downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile $msi -UseBasicParsing
+          Write-Host "Installing (silent, all features)…"
+          $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i", $msi, "/qn", "/norestart", "ADDLOCAL=ALL" -Wait -PassThru
+          Write-Host "msiexec exit code: $($proc.ExitCode)"
+          if ($proc.ExitCode -ne 0) { exit $proc.ExitCode }
       - name: Add WinFsp to PATH
         run: Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\WinFsp\bin"
       - name: Stage WinFsp DLL next to test binaries
         # LoadLibraryW("winfsp-x64.dll") searches the exe directory first;
         # cargo's per-test binary lives in target\debug\deps\ so put a copy
-        # there. WinFsp's MSI may install the DLL under Program Files\WinFsp\bin
-        # or just Program Files\WinFsp\, so glob to find it. This is more
-        # robust than relying on PATH propagation.
+        # there. The official MSI installs the DLL at
+        # C:\Program Files\WinFsp\bin\winfsp-x64.dll.
         run: |
-          $dll = Get-ChildItem -Path "C:\Program Files\WinFsp" -Filter "winfsp-x64.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($null -eq $dll) {
-            Write-Host "winfsp-x64.dll not found under C:\Program Files\WinFsp. Contents:"
-            Get-ChildItem -Path "C:\Program Files\WinFsp" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName | Format-Table -HideTableHeaders
-            exit 1
+          $src = "C:\Program Files\WinFsp\bin\winfsp-x64.dll"
+          if (-not (Test-Path $src)) {
+            Write-Host "DLL not found at $src. Searching entire Program Files…"
+            $src = (Get-ChildItem -Path "C:\Program Files" -Filter "winfsp-x64.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+            if (-not $src) { Write-Host "DLL truly missing"; exit 1 }
           }
-          Write-Host "Found DLL at: $($dll.FullName)"
+          Write-Host "Copying $src → deps\winfsp-x64.dll"
           New-Item -ItemType Directory -Force -Path "${{ github.workspace }}\target\debug\deps" | Out-Null
-          Copy-Item $dll.FullName -Destination "${{ github.workspace }}\target\debug\deps\winfsp-x64.dll" -Force
-          Write-Host "Staged to: ${{ github.workspace }}\target\debug\deps\winfsp-x64.dll"
+          Copy-Item $src -Destination "${{ github.workspace }}\target\debug\deps\winfsp-x64.dll" -Force
       - name: Run tests
         run: cargo test --all-features
         env:

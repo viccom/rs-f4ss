@@ -757,14 +757,24 @@ phase4_errors() {
     if [ "$code" = "502" ] || [ "$code" = "409" ]; then
         pass "Unreachable backend returns $code"
     else
-        # start is async — poll for Error state up to 5s
+        # start is async — poll for Error state up to 5s. MountState::Error is
+        # serialized as the bare string "Error" once Error(...) unwraps, or
+        # as {"Error": "<msg>"} while the failure message is still attached.
+        # Use jq to detect either shape.
         state=""
         for _ in 1 2 3 4 5 6 7 8 9 10; do
             body=$(api GET /api/mounts/err-test)
-            state=$(echo "$body" | jq -r '.state')
-            if [ "$state" = "Error" ]; then
+            # `state` is "Error" (string) or { "Error": "..." } (object) or
+            # "Running"/"Stopped" etc. Test Error-ness with a single jq check.
+            if echo "$body" | jq -e '.state | type == "string" and . == "Error"' >/dev/null 2>&1; then
+                state="Error"
                 break
             fi
+            if echo "$body" | jq -e '.state | type == "object" and has("Error")' >/dev/null 2>&1; then
+                state="Error"
+                break
+            fi
+            state=$(echo "$body" | jq -r '.state')
             sleep 0.5
         done
         if [ "$state" = "Error" ]; then
