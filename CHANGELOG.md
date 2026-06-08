@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Development guide (DEV_GUIDE.md)
 - Contributing guide (CONTRIBUTING.md)
 - README with quick start guide
+- TDD methodology document ([docs/TDD.md](docs/TDD.md))
+- GitHub Actions CI workflow (`.github/workflows/ci.yml`)
+  - `rustfmt`, `clippy`, unit/integration tests across the feature matrix
+  - Linux + Windows builds (FUSE / WinFsp)
+  - E2E suite (FUSE, REST API, P2P share) with log artifact upload on failure
+- Issue & PR templates (`.github/ISSUE_TEMPLATE/`, `.github/PULL_REQUEST_TEMPLATE.md`)
+
+### Changed
+- README rewritten to the standard of excellent GitHub open-source projects:
+  feature highlights, architecture diagram, full usage, feature matrix, build
+  options, configuration, roadmap, project stats, acknowledgments
 
 ---
 
