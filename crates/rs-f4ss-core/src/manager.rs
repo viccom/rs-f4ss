@@ -14,6 +14,34 @@ use crate::mount::{MountConfig, MountEngine};
 use crate::persistence;
 
 // ---------------------------------------------------------------------------
+// Platform-specific mount owner (used to populate FUSE file attr ownership)
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+fn mount_uid_value() -> u32 {
+    // SAFETY: getuid is async-signal-safe and never fails.
+    unsafe { libc::getuid() }
+}
+
+#[cfg(unix)]
+fn mount_gid_value() -> u32 {
+    // SAFETY: getgid is async-signal-safe and never fails.
+    unsafe { libc::getgid() }
+}
+
+// Windows has no Unix uid/gid; the FUSE adapter on Windows uses NT security
+// descriptors and does not need these.
+#[cfg(not(unix))]
+fn mount_uid_value() -> u32 {
+    0
+}
+
+#[cfg(not(unix))]
+fn mount_gid_value() -> u32 {
+    0
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -272,8 +300,8 @@ impl MountManager {
                     cache_ttl: std::time::Duration::from_secs(entry.cache_ttl_secs),
                     cache_size: entry.cache_size,
                     allow_other: false,
-                    mount_uid: unsafe { libc::getuid() },
-                    mount_gid: unsafe { libc::getgid() },
+                    mount_uid: mount_uid_value(),
+                    mount_gid: mount_gid_value(),
                     on_mount_ready: Some(Arc::new(move || {
                         *ms_ready.lock().unwrap() = MountState::Running;
                     })),

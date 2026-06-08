@@ -460,6 +460,19 @@ async fn start_mount(
             .into_response();
     }
 
+    // Reject unsupported protocols synchronously so the API caller sees 400
+    // immediately instead of a 200 with a deferred mount error.
+    if !is_supported_protocol(&entry.url) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(error_json(&format!(
+                "Unsupported protocol: {}",
+                entry.url
+            ))),
+        )
+            .into_response();
+    }
+
     // Capture entry data for deferred backend creation inside the mount thread.
     // This avoids creating a reqwest::Client on the API tokio runtime and then
     // moving it to a different runtime — the source of the Windows Instant overflow panic.
@@ -718,6 +731,23 @@ fn create_backend(
     }
 
     Err(format!("Unsupported protocol: {url}"))
+}
+
+/// True iff `url` resolves to a backend feature that is compiled in.
+fn is_supported_protocol(url: &str) -> bool {
+    let protocol = crate::backend::detect_protocol(url);
+
+    #[cfg(feature = "webdav")]
+    if protocol == "webdav" {
+        return true;
+    }
+
+    #[cfg(feature = "http")]
+    if protocol == "http" || protocol == "webdav" {
+        return true;
+    }
+
+    false
 }
 
 // ---------------------------------------------------------------------------
