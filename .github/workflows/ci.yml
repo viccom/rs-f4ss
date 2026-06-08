@@ -97,20 +97,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install WinFsp
-        # The Chocolatey `winfsp` package bundles a stripped MSI that installs
-        # files only into a SxS directory under C:\Program Files\WinFsp\DYNAMIC,
-        # which makes the user-mode DLL loader unable to find winfsp-x64.dll
-        # for cargo's per-test binaries. Download the official WinFsp MSI from
-        # GitHub Releases and run a full silent install — it puts DLLs in
-        # C:\Program Files\WinFsp\bin\ and registers a WinFsp Launcher service
-        # that the integration tests need anyway.
+        # The chocolatey `winfsp` package is currently marked "Possibly broken"
+        # (v2.1.25156 packages the MSI in an OPC wrapper chocolatey can't
+        # extract properly). Install the official MSI from GitHub Releases
+        # directly. The MSI's full layout puts DLLs at
+        # C:\Program Files\WinFsp\DYNAMIC\SxS\DYNAMIC\bin\winfsp-x64.dll —
+        # the WinFsp Launcher service is what later deploys them to bin\.
+        # We don't run the launcher on CI, so we just copy from the SxS path.
         run: |
           $url = "https://github.com/winfsp/winfsp/releases/download/v2.0/winfsp-2.0.23075.msi"
           $msi = "$env:TEMP\winfsp.msi"
           Write-Host "Downloading $url"
           Invoke-WebRequest -Uri $url -OutFile $msi -UseBasicParsing
-          Write-Host "Installing (silent, all features)…"
-          $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i", $msi, "/qn", "/norestart", "ADDLOCAL=ALL" -Wait -PassThru
+          Write-Host "Running silent install…"
+          $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i", $msi, "/qn", "/norestart" -Wait -PassThru
           Write-Host "msiexec exit code: $($proc.ExitCode)"
           if ($proc.ExitCode -ne 0) { exit $proc.ExitCode }
       - name: Add WinFsp to PATH
@@ -118,16 +118,27 @@ jobs:
       - name: Stage WinFsp DLL next to test binaries
         # LoadLibraryW("winfsp-x64.dll") searches the exe directory first;
         # cargo's per-test binary lives in target\debug\deps\ so put a copy
-        # there. The official MSI installs the DLL at
-        # C:\Program Files\WinFsp\bin\winfsp-x64.dll.
+        # there. The MSI installs the DLL at the SxS path below; copy it
+        # from there rather than relying on the launcher service to deploy.
         run: |
-          $src = "C:\Program Files\WinFsp\bin\winfsp-x64.dll"
-          if (-not (Test-Path $src)) {
-            Write-Host "DLL not found at $src. Searching entire Program Files…"
-            $src = (Get-ChildItem -Path "C:\Program Files" -Filter "winfsp-x64.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
-            if (-not $src) { Write-Host "DLL truly missing"; exit 1 }
+          $candidates = @(
+            "C:\Program Files\WinFsp\bin\winfsp-x64.dll",
+            "C:\Program Files\WinFsp\DYNAMIC\SxS\DYNAMIC\bin\winfsp-x64.dll",
+            "C:\Program Files (x86)\WinFsp\bin\winfsp-x64.dll"
+          )
+          $src = $null
+          foreach ($p in $candidates) {
+            if (Test-Path $p) { $src = $p; break }
           }
-          Write-Host "Copying $src → deps\winfsp-x64.dll"
+          if (-not $src) {
+            $src = (Get-ChildItem -Path "C:\Program Files", "C:\Program Files (x86)" -Filter "winfsp-x64.dll" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          }
+          if (-not $src) {
+            Write-Host "winfsp-x64.dll not found. Dumping C:\Program Files:"
+            Get-ChildItem -Path "C:\Program Files" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match "WinFsp|winfsp" } | Select-Object FullName | Format-Table -HideTableHeaders
+            exit 1
+          }
+          Write-Host "Staging $src → deps\winfsp-x64.dll"
           New-Item -ItemType Directory -Force -Path "${{ github.workspace }}\target\debug\deps" | Out-Null
           Copy-Item $src -Destination "${{ github.workspace }}\target\debug\deps\winfsp-x64.dll" -Force
       - name: Run tests
