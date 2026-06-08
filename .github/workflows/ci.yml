@@ -100,6 +100,14 @@ jobs:
         run: choco install winfsp --no-progress
       - name: Add WinFsp to PATH
         run: Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\WinFsp\bin"
+      - name: Stage WinFsp DLL next to test binaries
+        # LoadLibraryW("winfsp-x64.dll") searches the exe directory first;
+        # cargo's per-test binary lives in target\debug\deps\ so put a copy
+        # there. This is more robust than relying on PATH propagation.
+        run: |
+          Copy-Item "C:\Program Files\WinFsp\bin\winfsp-x64.dll" `
+            -Destination "${{ github.workspace }}\target\debug\deps\winfsp-x64.dll" `
+            -Force
       - name: Run tests
         run: cargo test --all-features
         env:

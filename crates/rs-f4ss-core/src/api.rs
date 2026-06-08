@@ -465,10 +465,7 @@ async fn start_mount(
     if !is_supported_protocol(&entry.url) {
         return (
             StatusCode::BAD_REQUEST,
-            Json(error_json(&format!(
-                "Unsupported protocol: {}",
-                entry.url
-            ))),
+            Json(error_json(&format!("Unsupported protocol: {}", entry.url))),
         )
             .into_response();
     }
