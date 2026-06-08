@@ -27,6 +27,25 @@ peer-to-peer file sharing between rs-f4ss instances.
 
 ---
 
+> **AI 协助开发 · AI-Assisted Development**
+>
+> 本项目的需求分析、架构设计、代码实现、测试用例与文档编写,**完全由 AI 编程助手生成**;
+> 项目维护者承担 prompt 工程、需求定义、人工审阅验证、缺陷修正与发布工程。
+>
+> 主要使用的大语言模型(按开发时间顺序):
+>
+> | 模型 | 阶段 / 贡献 |
+> |------|------------|
+> | 智谱AI GLM-5.1 | 早期架构 · 核心 FUSE/WinFsp 适配层 |
+> | DeepSeek-V4-Pro | 服务端 · 协议栈(WebDAV / HTTP)· CI 反复修复 |
+> | MiniMax-M3 (经 Claude Code 2.1.150) | Vue 3 UI · 跨平台发布 · 文档与 TDD 编写 |
+>
+> 使用方式、提交记录与质量保证过程均可在 [commit history](../../commits/master)、
+> [CI 报告](../../actions) 与 [CHANGELOG.md](CHANGELOG.md) 中追溯。
+> 如发现 AI 生成内容存在偏差,欢迎通过 [Issue](../../issues) 反馈。
+
+---
+
 ## ✨ Features
 
 ### 📂 Mount — Turn remote servers into local filesystems
