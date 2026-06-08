@@ -136,7 +136,7 @@ stop_api() {
 
 cleanup() {
     # Unmount any mounts created during tests
-    for mp in /mnt/dufs-api-test-*; do
+    for mp in /tmp/dufs-api-test-*; do
         if mountpoint -q "$mp" 2>/dev/null; then
             fusermount -u "$mp" 2>/dev/null || true
         fi
@@ -144,7 +144,7 @@ cleanup() {
     stop_api
     stop_dufs
     rm -rf "$DUFS_DATA" 2>/dev/null || true
-    for mp in /mnt/dufs-api-test-*; do
+    for mp in /tmp/dufs-api-test-*; do
         rmdir "$mp" 2>/dev/null || true
     done
 }
@@ -371,7 +371,7 @@ phase2_crud() {
     code=$(api_code POST /api/mounts -H 'Content-Type: application/json' -d '{
         "id": "test1",
         "url": "http://127.0.0.1:'"$DUFS_PORT"'",
-        "mountpoint": "/mnt/dufs-api-test-1"
+        "mountpoint": "/tmp/dufs-api-test-1"
     }')
     if [ "$code" = "201" ]; then
         pass "Create mount returns 201"
@@ -383,7 +383,7 @@ phase2_crud() {
     body=$(api POST /api/mounts -H 'Content-Type: application/json' -d '{
         "id": "test1-verify",
         "url": "http://127.0.0.1:'"$DUFS_PORT"'",
-        "mountpoint": "/mnt/dufs-api-test-1v"
+        "mountpoint": "/tmp/dufs-api-test-1v"
     }')
     if echo "$body" | jq -e '.id == "test1-verify"' >/dev/null 2>&1 \
        && echo "$body" | jq -e '.state == "Stopped"' >/dev/null 2>&1; then
@@ -397,7 +397,7 @@ phase2_crud() {
     body=$(api POST /api/mounts -H 'Content-Type: application/json' -d '{
         "id": "test-cache",
         "url": "http://127.0.0.1:'"$DUFS_PORT"'",
-        "mountpoint": "/mnt/dufs-api-test-cache",
+        "mountpoint": "/tmp/dufs-api-test-cache",
         "cache_ttl_secs": 10,
         "cache_size": 512
     }')
@@ -413,7 +413,7 @@ phase2_crud() {
     body=$(api POST /api/mounts -H 'Content-Type: application/json' -d '{
         "id": "test-auth",
         "url": "http://127.0.0.1:'"$DUFS_PORT"'",
-        "mountpoint": "/mnt/dufs-api-test-auth",
+        "mountpoint": "/tmp/dufs-api-test-auth",
         "username": "admin",
         "password": "secret"
     }')
@@ -434,7 +434,7 @@ phase2_crud() {
     code=$(api_code POST /api/mounts -H 'Content-Type: application/json' -d '{
         "id": "test1",
         "url": "http://127.0.0.1:'"$DUFS_PORT"'",
-        "mountpoint": "/mnt/dufs-api-test-1"
+        "mountpoint": "/tmp/dufs-api-test-1"
     }')
     if [ "$code" = "409" ]; then
         pass "Duplicate mount returns 409 Conflict"
@@ -550,7 +550,7 @@ phase3_lifecycle() {
     echo -e "\n${CYAN}══ Phase 3 — Lifecycle: Start → FUSE ops → Stop ══${NC}"
 
     # Prepare mountpoint
-    MOUNTPOINT="/mnt/dufs-api-test-1"
+    MOUNTPOINT="/tmp/dufs-api-test-1"
     mkdir -p "$MOUNTPOINT" 2>/dev/null || true
 
     # Update test1 mountpoint to real path
@@ -708,7 +708,7 @@ phase4_errors() {
     api POST /api/mounts -H 'Content-Type: application/json' -d '{
         "id": "err-test",
         "url": "http://127.0.0.1:'"$DUFS_PORT"'",
-        "mountpoint": "/mnt/dufs-api-test-err"
+        "mountpoint": "/tmp/dufs-api-test-err"
     }' >/dev/null
 
     # Start with non-existent entry
@@ -745,7 +745,7 @@ phase4_errors() {
     api PUT /api/mounts/err-test -H 'Content-Type: application/json' -d '{
         "url": "http://127.0.0.1:19999"
     }' >/dev/null
-    mkdir -p "/mnt/dufs-api-test-err" 2>/dev/null || true
+    mkdir -p "/tmp/dufs-api-test-err" 2>/dev/null || true
     code=$(api_code POST /api/mounts/err-test/start)
     if [ "$code" = "502" ] || [ "$code" = "409" ]; then
         pass "Unreachable backend returns $code"
@@ -770,7 +770,7 @@ phase4_errors() {
     run_test "Create — missing id"
     code=$(api_code POST /api/mounts -H 'Content-Type: application/json' -d '{
         "url": "http://127.0.0.1:'"$DUFS_PORT"'",
-        "mountpoint": "/mnt/dufs-api-test-noid"
+        "mountpoint": "/tmp/dufs-api-test-noid"
     }')
     if [ "$code" = "400" ] || [ "$code" = "422" ]; then
         pass "Missing id rejected"
@@ -806,9 +806,9 @@ phase4_errors() {
     api POST /api/mounts -H 'Content-Type: application/json' -d '{
         "id": "ftp-test",
         "url": "ftp://example.com/files",
-        "mountpoint": "/mnt/dufs-api-test-ftp"
+        "mountpoint": "/tmp/dufs-api-test-ftp"
     }' >/dev/null
-    mkdir -p "/mnt/dufs-api-test-ftp" 2>/dev/null || true
+    mkdir -p "/tmp/dufs-api-test-ftp" 2>/dev/null || true
     code=$(api_code POST /api/mounts/ftp-test/start)
     if [ "$code" = "400" ]; then
         pass "Unsupported protocol returns 400"
@@ -847,7 +847,7 @@ phase5_concurrency() {
     code=$(api_code POST /api/mounts -H 'Content-Type: application/json' -d '{
         "id": "conc-test",
         "url": "http://127.0.0.1:'"$DUFS_PORT"'",
-        "mountpoint": "/mnt/dufs-api-test-conc"
+        "mountpoint": "/tmp/dufs-api-test-conc"
     }')
     if [ "$code" = "201" ]; then
         pass "First create succeeded"
@@ -857,7 +857,7 @@ phase5_concurrency() {
     code=$(api_code POST /api/mounts -H 'Content-Type: application/json' -d '{
         "id": "conc-test",
         "url": "http://127.0.0.1:'"$DUFS_PORT"'",
-        "mountpoint": "/mnt/dufs-api-test-conc"
+        "mountpoint": "/tmp/dufs-api-test-conc"
     }')
     if [ "$code" = "409" ]; then
         pass "Duplicate create rejected with 409"
@@ -871,7 +871,7 @@ phase5_concurrency() {
         api POST /api/mounts -H 'Content-Type: application/json' -d "{
             \"id\": \"cycle-$i\",
             \"url\": \"http://127.0.0.1:$DUFS_PORT\",
-            \"mountpoint\": \"/mnt/dufs-api-test-cycle-$i\"
+            \"mountpoint\": \"/tmp/dufs-api-test-cycle-$i\"
         }" >/dev/null 2>&1 || true
         api DELETE /api/mounts/"cycle-$i" >/dev/null 2>&1 || true
     done
