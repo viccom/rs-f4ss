@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/viccom/rs-f4ss/tree/master/docs
+    about: Read SPEC, ADR, TEST_PLAN, TDD, DEV_GUIDE, and TASKS before opening an issue.
+  - name: Discussions
+    url: https://github.com/viccom/rs-f4ss/discussions
+    about: For questions, ideas, and "how do I…" — please use Discussions, not Issues.
