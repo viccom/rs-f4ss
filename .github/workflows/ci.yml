@@ -153,6 +153,7 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install winfsp --no-progress
       - name: cargo build
+        shell: bash
         run: |
           ARGS=(--release)
           if [ -n "${{ matrix.target }}" ]; then
@@ -175,9 +176,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@dufs
-        with:
-          version: "0.43.0"
+      - name: Install dufs (test server)
+        run: cargo install dufs --version 0.43.0 --locked --root /usr/local
       - name: Install Linux system dependencies
         run: |
           sudo apt-get update
