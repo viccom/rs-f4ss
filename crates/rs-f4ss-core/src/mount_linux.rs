@@ -206,7 +206,9 @@ impl<B: StorageBackend> Filesystem for FuseAdapter<B> {
                     let new_size_u32 = match u32::try_from(new_size) {
                         Ok(s) => s,
                         Err(_) => {
-                            tracing::warn!("setattr: truncating to {new_size} bytes exceeds max, rejecting");
+                            tracing::warn!(
+                                "setattr: truncating to {new_size} bytes exceeds max, rejecting"
+                            );
                             reply.error(Errno::EFBIG);
                             return;
                         }

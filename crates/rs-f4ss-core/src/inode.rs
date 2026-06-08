@@ -230,9 +230,6 @@ mod tests {
         let file = PathBuf::from("/old/a.md");
         let inode = map.get_or_insert(&file, NodeKind::File);
         map.rename_subtree(Path::new("/old"), Path::new("/new"));
-        assert_eq!(
-            map.get_path(inode).unwrap().as_os_str(),
-            "/new/a.md"
-        );
+        assert_eq!(map.get_path(inode).unwrap().as_os_str(), "/new/a.md");
     }
 }

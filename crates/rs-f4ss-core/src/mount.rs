@@ -6,7 +6,9 @@ use std::time::Duration;
 pub type UnmountCallback = Arc<dyn Fn() + Send + Sync>;
 pub type SetUnmountCallback = Arc<dyn Fn(UnmountCallback) + Send + Sync>;
 
-fn recover_lock<T>(r: std::sync::LockResult<std::sync::MutexGuard<'_, T>>) -> std::sync::MutexGuard<'_, T> {
+fn recover_lock<T>(
+    r: std::sync::LockResult<std::sync::MutexGuard<'_, T>>,
+) -> std::sync::MutexGuard<'_, T> {
     r.unwrap_or_else(|e| {
         tracing::warn!("Recovering from poisoned internal lock");
         e.into_inner()
@@ -147,8 +149,7 @@ impl<B: StorageBackend> FuseAdapter<B> {
             None => {
                 // Not ready yet — put slot back
                 drop(guard);
-                recover_lock(self.prefetch.lock())
-                    .insert(fh, slot);
+                recover_lock(self.prefetch.lock()).insert(fh, slot);
                 None
             }
         }
@@ -224,8 +225,7 @@ impl<B: StorageBackend> FuseAdapter<B> {
             *recover_lock(result_clone.lock()) = prefetch_result;
         });
 
-        recover_lock(self.prefetch.lock())
-            .insert(fh, PrefetchSlot { result, _handle });
+        recover_lock(self.prefetch.lock()).insert(fh, PrefetchSlot { result, _handle });
     }
 
     /// Abort any pending prefetch for a file handle.
@@ -373,8 +373,7 @@ impl<B: StorageBackend> FuseAdapter<B> {
 
         // Record bandwidth observation
         if !data.is_empty() {
-            recover_lock(self.bandwidth.lock())
-                .observe(data.len() as u64, elapsed);
+            recover_lock(self.bandwidth.lock()).observe(data.len() as u64, elapsed);
         }
 
         // Split data: full prefetch goes to cache, caller gets only requested slice.
@@ -627,8 +626,7 @@ impl MockBackend {
             size,
             mtime: std::time::SystemTime::UNIX_EPOCH,
         });
-        recover_lock(self.content.lock())
-            .push((path.to_string(), data.to_vec()));
+        recover_lock(self.content.lock()).push((path.to_string(), data.to_vec()));
     }
 
     pub fn add_dir(&self, path: &str, name: &str) {
@@ -745,10 +743,8 @@ impl StorageBackend for MockBackend {
     }
 
     async fn delete(&self, path: &str) -> Result<(), BackendError> {
-        recover_lock(self.entries.lock())
-            .retain(|e| e.path != path);
-        recover_lock(self.content.lock())
-            .retain(|(p, _)| p != path);
+        recover_lock(self.entries.lock()).retain(|e| e.path != path);
+        recover_lock(self.content.lock()).retain(|(p, _)| p != path);
         Ok(())
     }
 

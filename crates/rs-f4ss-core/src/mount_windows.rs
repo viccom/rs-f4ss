@@ -955,7 +955,7 @@ mod tests {
         let ctx = FileContext::new_test("/delete.txt", false, false);
         assert_eq!(ctx.close_action(), CloseAction::Release);
 
-        ctx.record_cleanup_result(FspCleanupDelete, true);
+        ctx.record_cleanup_result(FspCleanupDelete as u32, true);
 
         assert!(ctx.delete_requested());
         assert_eq!(ctx.close_action(), CloseAction::Discard);

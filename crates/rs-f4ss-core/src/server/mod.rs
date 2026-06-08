@@ -203,9 +203,7 @@ async fn handle_request(State(state): State<Arc<FileServerState>>, req: Request)
                     )
                     .await
                 }
-                "PROPPATCH" => {
-                    webdav::handle_proppatch(&url_path, body_bytes.as_deref())
-                }
+                "PROPPATCH" => webdav::handle_proppatch(&url_path, body_bytes.as_deref()),
                 "LOCK" => webdav::handle_lock(&url_path, headers.get("authorization").is_some()),
                 "UNLOCK" => webdav::handle_unlock(),
                 _ => StatusCode::METHOD_NOT_ALLOWED.into_response(),

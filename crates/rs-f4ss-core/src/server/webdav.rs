@@ -84,9 +84,7 @@ pub fn handle_proppatch(url_path: &str, body: Option<&[u8]>) -> Response {
 
     // Extract property element names from <D:set><D:prop>...</D:prop></D:set>
     // and <D:remove><D:prop>...</D:prop></D:remove> blocks.
-    let prop_names = body
-        .map(extract_prop_names)
-        .unwrap_or_default();
+    let prop_names = body.map(extract_prop_names).unwrap_or_default();
 
     let prop_inner = if prop_names.is_empty() {
         // No parseable body — list standard DAV live properties.
@@ -353,7 +351,15 @@ mod tests {
   </D:remove>
 </D:propertyupdate>"#;
         let names = extract_prop_names(body);
-        assert_eq!(names, vec!["D:displayname", "D:getcontenttype", "D:creationdate", "D:comment"]);
+        assert_eq!(
+            names,
+            vec![
+                "D:displayname",
+                "D:getcontenttype",
+                "D:creationdate",
+                "D:comment"
+            ]
+        );
     }
 
     #[test]
@@ -377,9 +383,15 @@ mod tests {
         let resp = handle_proppatch("/foo.txt", Some(body));
         let (status, headers, body_bytes) = decompose_response(resp);
         assert_eq!(status, StatusCode::MULTI_STATUS);
-        assert_eq!(headers.get("content-type").unwrap(), "application/xml; charset=utf-8");
+        assert_eq!(
+            headers.get("content-type").unwrap(),
+            "application/xml; charset=utf-8"
+        );
         let xml = String::from_utf8(body_bytes).unwrap();
-        assert!(xml.contains("<D:displayname/>"), "should echo the requested property");
+        assert!(
+            xml.contains("<D:displayname/>"),
+            "should echo the requested property"
+        );
         assert!(xml.contains("403 Forbidden"));
     }
 
@@ -396,7 +408,10 @@ mod tests {
     fn decompose_response(resp: Response) -> (StatusCode, HeaderMap, Vec<u8>) {
         let (parts, body) = resp.into_parts();
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let bytes = rt.block_on(axum::body::to_bytes(body, 1_000_000)).unwrap().to_vec();
+        let bytes = rt
+            .block_on(axum::body::to_bytes(body, 1_000_000))
+            .unwrap()
+            .to_vec();
         (parts.status, parts.headers, bytes)
     }
 }
