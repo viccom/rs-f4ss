@@ -99,7 +99,7 @@ jobs:
       - name: Install WinFsp
         run: choco install winfsp --no-progress
       - name: Add WinFsp to PATH
-        run: echo "C:\Program Files\WinFsp\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+        run: Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\WinFsp\bin"
       - name: Run tests
         run: cargo test --all-features
         env:
@@ -156,7 +156,7 @@ jobs:
         run: choco install winfsp --no-progress
       - name: Add WinFsp to PATH (Windows)
         if: runner.os == 'Windows'
-        run: echo "C:\Program Files\WinFsp\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+        run: Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\WinFsp\bin"
       - name: cargo build
         shell: bash
         run: |
