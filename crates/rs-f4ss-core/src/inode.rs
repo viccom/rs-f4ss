@@ -139,12 +139,19 @@ impl InodeMap {
 
     /// Rename a path and all registered descendants.
     pub fn rename_subtree(&self, old_path: &Path, new_path: &Path) {
-        let old_str = old_path.to_string_lossy();
+        // InodeMap stores virtual-FS paths (always POSIX-style, "/foo/bar"
+        // regardless of host platform) so that Linux and Windows code paths
+        // see the same keys. Use string-level concatenation on the
+        // lossy representation rather than `Path::join`, which on Windows
+        // re-canonicalizes the joined path to use `\` separators and would
+        // produce mixed-separator keys like "/new\\a.md".
+        let old_str = old_path.to_string_lossy().into_owned();
         let prefix = if old_str.ends_with('/') {
-            old_str.to_string()
+            old_str.clone()
         } else {
             format!("{}/", old_str)
         };
+        let new_str = new_path.to_string_lossy().into_owned();
 
         let updates: Vec<_> = self
             .path_to_inode
@@ -153,8 +160,14 @@ impl InodeMap {
                 let path = entry.key();
                 let p = path.to_string_lossy();
                 if p == old_str || p.starts_with(prefix.as_str()) {
-                    let suffix = path.strip_prefix(old_path).unwrap_or(Path::new(""));
-                    Some((*entry.value(), path.clone(), new_path.join(suffix)))
+                    let suffix = &p[old_str.len()..];
+                    let suffix = suffix.strip_prefix('/').unwrap_or(suffix);
+                    let new = if suffix.is_empty() {
+                        PathBuf::from(&new_str)
+                    } else {
+                        PathBuf::from(format!("{}/{}", new_str.trim_end_matches('/'), suffix))
+                    };
+                    Some((*entry.value(), path.clone(), new))
                 } else {
                     None
                 }
