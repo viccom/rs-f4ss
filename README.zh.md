@@ -67,7 +67,7 @@
 - "Celadon Glass" 浏览器文件预览(Prism 语法高亮 · marked Markdown · DOMPurify XSS 防护 · focus-trap 模态框 · 响应式网格)
 
 ### 🎛️ 管理 (Manage) — REST API + Web UI
-- 9 个 `/api/*` 端点 — 单实例约束
+- 9 个 `/api/*` 端点 — 单实例约束(开启 `selfupdate` 后共 14 个)
 - 嵌入式 Vue 3 SPA(无需构建步骤,二进制内嵌)
 - 挂载管理器(列出 / 新增 / 删除 / 启动 / 停止 + JSON 持久化)
 - 分享管理器(同样生命周期,独立的监听地址)
@@ -77,6 +77,12 @@
 - 单实例锁 · 托盘菜单 · 窗口管理
 - 支持 Linux 上使用 `cargo xwin` 跨编译(MSVC target)
 - 运行时依赖 WinFsp
+
+### 🔄 自升级 (Self-update) — 原地替换运行中的二进制
+- `rs-f4ss update check` / `apply` —— 拉取 GitHub release 清单，校验 SHA256，原子替换可执行文件
+- REST 同样支持:`GET /api/update/version|check|progress`、`POST /api/update/apply|restart`
+- 设置 `RS_F4SS_UPDATE_PUBKEY` 后强制做 Ed25519 (Minisign) 签名校验
+- 基于独立的 [rs-selfupdater](https://github.com/viccom/rs-selfupdater) 库实现
 
 ---
 
@@ -250,6 +256,40 @@ rs-f4ss share stop myfiles
 rs-f4ss share del myfiles
 ```
 
+### 自升级
+
+```bash
+# 查看要请求的 manifest URL、当前版本、可执行文件路径
+rs-f4ss update version
+
+# 检查清单中是否有新版本(不下载)
+rs-f4ss update check
+
+# 下载、校验 SHA256、替换二进制并原地重启
+rs-f4ss update apply
+
+# 应用更新但不重启(由运维自行重启进程)
+rs-f4ss update apply --no-restart
+```
+
+通过 `RS_F4SS_UPDATE_URL` 可以覆盖清单地址(用于私有镜像 / 灰度环境);
+设置 `RS_F4SS_UPDATE_PUBKEY` 为 Minisign 公钥后,所有资产都会强制
+做 Ed25519 签名校验。
+
+同样的流程也可通过 HTTP 触发 —— 适合在远程机器以服务形式运行的场景:
+
+```bash
+curl -u admin:admin http://host:8080/api/update/version
+curl -u admin:admin http://host:8080/api/update/check
+curl -u admin:admin -X POST http://host:8080/api/update/apply
+curl -u admin:admin http://host:8080/api/update/progress
+curl -u admin:admin -X POST http://host:8080/api/update/restart
+```
+
+发布清单(`latest.json`)由 CI 从 release artifact 中生成 ——
+详见 `.github/workflows/release.yml` 和
+`crates/rs-f4ss-core/src/selfupdate/mod.rs` 顶部文档注释中的格式说明。
+
 ---
 
 ## 🔌 支持的协议与平台
@@ -291,6 +331,9 @@ cargo build --features webdav,api
 
 # 文件分享服务
 cargo build --features webdav,http,api,serve
+
+# 自升级器(基于 rs-selfupdater 库)
+cargo build --features webdav,api,selfupdate
 
 # 全部特性
 cargo build --all-features
@@ -368,6 +411,8 @@ powershell -File tests/e2e.ps1
 | `DUFS_MOUNT_PASSWORD` | 密码(覆盖 `--pass`,便于 CI 使用) |
 | `RUST_LOG` | tracing-subscriber 过滤,例如 `rs_f4ss=debug,fuser=info` |
 | `XDG_STATE_DIR` | 守护进程存储 PID 与日志文件的目录 |
+| `RS_F4SS_UPDATE_URL` | 自升级清单 URL(默认指向最新 GitHub release) |
+| `RS_F4SS_UPDATE_PUBKEY` | Minisign 公钥 —— 启用 Ed25519 签名校验 |
 
 ### 挂载配置持久化
 

@@ -96,6 +96,33 @@ enum Commands {
         #[arg(long, env = "RS_F4SS_API_PASS", help = "API auth password")]
         api_pass: Option<String>,
     },
+    /// Self-update the running binary
+    #[cfg(feature = "selfupdate")]
+    Update {
+        #[command(subcommand)]
+        action: UpdateAction,
+        /// Override the manifest URL (default: GitHub releases/latest/download/latest.json)
+        #[arg(long, env = "RS_F4SS_UPDATE_URL")]
+        manifest_url: Option<String>,
+        /// Optional minisign public key for signature verification
+        #[arg(long, env = "RS_F4SS_UPDATE_PUBKEY")]
+        public_key: Option<String>,
+    },
+}
+
+#[cfg(feature = "selfupdate")]
+#[derive(Subcommand)]
+enum UpdateAction {
+    /// Show the current version, manifest URL, and platform
+    Version,
+    /// Check for a newer release without applying it
+    Check,
+    /// Download, install, and restart the running binary in place
+    Apply {
+        /// Skip the restart step (binary is replaced, you restart manually)
+        #[arg(long)]
+        no_restart: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -323,6 +350,121 @@ fn handle_status() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 // ---------------------------------------------------------------------------
+// Self-update
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "selfupdate")]
+fn build_default_updater() -> Option<rs_f4ss_core::selfupdate::SelfUpdater> {
+    use rs_f4ss_core::selfupdate::{SelfUpdateConfig, SelfUpdater};
+    let config = SelfUpdateConfig::from_env();
+    match SelfUpdater::new(env!("CARGO_PKG_VERSION"), config) {
+        Ok(u) => Some(u),
+        Err(e) => {
+            tracing::warn!(
+                "self-update disabled: failed to construct updater: {e} (likely no manifest URL)"
+            );
+            None
+        }
+    }
+}
+
+#[cfg(feature = "selfupdate")]
+fn handle_update(
+    action: &UpdateAction,
+    manifest_url: Option<&str>,
+    public_key: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use rs_f4ss_core::selfupdate::{SelfUpdateConfig, SelfUpdater, UpdateInfo};
+
+    let mut config = SelfUpdateConfig::from_env();
+    if let Some(url) = manifest_url {
+        config.manifest_url = url.to_string();
+    }
+    if let Some(key) = public_key {
+        config.public_key = Some(key.to_string());
+    }
+
+    let updater = SelfUpdater::new(env!("CARGO_PKG_VERSION"), config)?;
+
+    match action {
+        UpdateAction::Version => {
+            let info = UpdateInfo::from_updater(&updater);
+            println!("rs-f4ss v{}", info.current_version);
+            println!("  manifest:   {}", info.manifest_url);
+            println!("  platform:   {}", info.platform);
+            println!(
+                "  exe:        {}",
+                info.exe_path.as_deref().unwrap_or("<unknown>")
+            );
+            println!(
+                "  signature:  {}",
+                if info.public_key_configured {
+                    "verified (minisign)"
+                } else {
+                    "sha256 only"
+                }
+            );
+        }
+        UpdateAction::Check => {
+            eprintln!("Checking {} …", updater.manifest_url());
+            match updater.check() {
+                Ok(Some(release)) => {
+                    let size = release
+                        .asset_for_current_platform()
+                        .map(|a| a.size)
+                        .unwrap_or(0);
+                    println!(
+                        "Update available: {} -> {} ({} bytes, released {})",
+                        updater.current_version(),
+                        release.version,
+                        size,
+                        release.date
+                    );
+                }
+                Ok(None) => {
+                    println!(
+                        "Already up to date (current = {}, latest = {})",
+                        updater.current_version(),
+                        updater.current_version()
+                    );
+                }
+                Err(e) => return Err(format!("check failed: {e}").into()),
+            }
+        }
+        UpdateAction::Apply { no_restart } => {
+            let release = match updater.check()? {
+                Some(r) => r,
+                None => {
+                    println!("Already up to date: {}", updater.current_version());
+                    return Ok(());
+                }
+            };
+            eprintln!(
+                "Updating {} -> {} from {}",
+                updater.current_version(),
+                release.version,
+                updater.manifest_url()
+            );
+            if *no_restart {
+                updater.apply(&release)?;
+                println!(
+                    "Update {} installed. Restart {} manually to use the new version.",
+                    release.version,
+                    SelfUpdater::current_exe_path()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|_| "the binary".into())
+                );
+            } else {
+                updater.apply_and_restart(&release)?;
+                // apply_and_restart() does not return on success — it execv's the
+                // new binary in place. We only get here on error.
+            }
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -444,6 +586,12 @@ fn run_with_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 return api_share_stop(api, api_user.as_deref(), api_pass.as_deref(), id)
             }
         },
+        #[cfg(feature = "selfupdate")]
+        Some(Commands::Update {
+            ref action,
+            ref manifest_url,
+            ref public_key,
+        }) => return handle_update(action, manifest_url.as_deref(), public_key.as_deref()),
         None => {}
     }
 
@@ -775,6 +923,8 @@ fn handle_serve(listen: &str, config_path: Option<&str>) -> Result<(), Box<dyn s
         },
         auth: std::sync::Mutex::new(auth),
         persist_path: path,
+        #[cfg(feature = "selfupdate")]
+        updater: build_default_updater(),
     });
     let app = rs_f4ss_core::api::create_router(state);
 

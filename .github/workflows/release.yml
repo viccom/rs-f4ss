@@ -65,11 +65,23 @@ jobs:
         run: |
           cd staging
           tar -czf "../${BINARY}-${TAG}-x86_64-unknown-linux-gnu.tar.gz" .
+      - name: Stage bare binary for self-update (CLI only)
+        if: matrix.target == 'rs-f4ss'
+        env:
+          BINARY: ${{ matrix.binary }}
+        run: cp "target/release/${BINARY}" "${BINARY}-${TAG}-linux-amd64"
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}-linux
           path: ${{ matrix.target }}-${{ env.TAG }}-x86_64-unknown-linux-gnu.tar.gz
+          if-no-files-found: error
+      - name: Upload bare binary artifact (CLI only)
+        if: matrix.target == 'rs-f4ss'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}-linux-bare
+          path: ${{ matrix.binary }}-${{ env.TAG }}-linux-amd64
           if-no-files-found: error
 
   # ─────────────────────────────────────────────────────────────────────
@@ -122,11 +134,24 @@ jobs:
         run: |
           cd staging
           tar -czf "../${BINARY}-${TAG}-x86_64-pc-windows-msvc.tar.gz" .
+      - name: Stage bare binary for self-update (CLI only)
+        if: matrix.target == 'rs-f4ss'
+        shell: bash
+        env:
+          BINARY: ${{ matrix.binary }}
+        run: cp "target/x86_64-pc-windows-msvc/release/${BINARY}" "rs-f4ss-${TAG}-windows-amd64.exe"
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}-windows
           path: ${{ matrix.target }}-${{ env.TAG }}-x86_64-pc-windows-msvc.tar.gz
+          if-no-files-found: error
+      - name: Upload bare binary artifact (CLI only)
+        if: matrix.target == 'rs-f4ss'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}-windows-bare
+          path: rs-f4ss-${{ env.TAG }}-windows-amd64.exe
           if-no-files-found: error
 
   # ─────────────────────────────────────────────────────────────────────
@@ -144,6 +169,68 @@ jobs:
           merge-multiple: true
       - name: List downloaded assets
         run: ls -la artifacts/
+      - name: Generate latest.json (self-update manifest)
+        # `latest.json` is consumed by the in-process self-updater
+        # (selfupdater::HttpSource) to decide whether a newer binary is
+        # available. It points at the version-pinned download URL so the
+        # checksum stays valid even after the next release is cut.
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cd artifacts
+
+          # Defence in depth: although git tag names cannot contain
+          # shell metacharacters, the `tags: ['v*']` glob would match
+          # a stray `v0.2.0-rc1` or `v0.2.0+meta`. The selfupdater
+          # compares versions string-wise, so any non-canonical
+          # suffix silently breaks version ordering. Reject anything
+          # that is not exactly `v<major>.<minor>.<patch>`.
+          if [[ ! "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: tag '${TAG}' does not match v<major>.<minor>.<patch>" >&2
+            exit 1
+          fi
+
+          # Strip leading "v" from tag to keep semver clean (selfupdater
+          # compares versions string-wise).
+          VERSION="${TAG#v}"
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          LINUX_BIN="rs-f4ss-${TAG}-linux-amd64"
+          WIN_BIN="rs-f4ss-${TAG}-windows-amd64.exe"
+
+          if [[ ! -f "${LINUX_BIN}" ]]; then
+            echo "ERROR: missing ${LINUX_BIN}" >&2
+            exit 1
+          fi
+          if [[ ! -f "${WIN_BIN}" ]]; then
+            echo "ERROR: missing ${WIN_BIN}" >&2
+            exit 1
+          fi
+
+          LINUX_SHA=$(sha256sum "${LINUX_BIN}" | awk '{print $1}')
+          LINUX_SIZE=$(stat -c%s "${LINUX_BIN}")
+          WIN_SHA=$(sha256sum "${WIN_BIN}"  | awk '{print $1}')
+          WIN_SIZE=$(stat -c%s "${WIN_BIN}")
+
+          BASE_URL="https://github.com/${REPO}/releases/download/${TAG}"
+
+          # Use printf to avoid heredoc indentation leaking into the JSON.
+          printf '%s\n' \
+            '{' \
+            "  \"version\": \"${VERSION}\"," \
+            "  \"date\":    \"${DATE}\"," \
+            '  "assets": {' \
+            "    \"linux/amd64\":   {\"url\": \"${BASE_URL}/${LINUX_BIN}\", \"sha256\": \"${LINUX_SHA}\", \"size\": ${LINUX_SIZE}}," \
+            "    \"windows/amd64\": {\"url\": \"${BASE_URL}/${WIN_BIN}\",   \"sha256\": \"${WIN_SHA}\",   \"size\": ${WIN_SIZE}}" \
+            '  }' \
+            '}' > latest.json
+
+          echo "--- latest.json ---"
+          cat latest.json
+          # Validate with python (preinstalled on ubuntu-latest)
+          python3 -c "import json; json.load(open('latest.json'))" && echo "JSON OK"
+          ls -la
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -153,5 +240,8 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             artifacts/*.tar.gz
+            artifacts/rs-f4ss-*-linux-amd64
+            artifacts/rs-f4ss-*-windows-amd64.exe
+            artifacts/latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

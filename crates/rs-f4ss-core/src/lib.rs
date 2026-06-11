@@ -23,6 +23,9 @@ pub mod server;
 #[cfg(feature = "serve")]
 pub mod share_manager;
 
+#[cfg(feature = "selfupdate")]
+pub mod selfupdate;
+
 pub use backend::{detect_protocol, Entry, StorageBackend};
 pub use error::{BackendError, MountError};
 pub use handle::HandleTable;

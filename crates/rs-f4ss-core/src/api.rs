@@ -20,6 +20,9 @@ use crate::persistence::{self, AuthConfig};
 #[cfg(feature = "serve")]
 use crate::share_manager::{ShareConfig, ShareManager};
 
+#[cfg(feature = "selfupdate")]
+use crate::selfupdate::{SelfUpdater, UpdateInfo};
+
 // ---------------------------------------------------------------------------
 // App state
 // ---------------------------------------------------------------------------
@@ -30,6 +33,10 @@ pub struct AppState {
     pub shares: ShareManager,
     pub auth: Mutex<AuthConfig>,
     pub persist_path: PathBuf,
+    /// Optional self-updater. `None` when the binary is not allowed to
+    /// update itself (e.g. managed systemd unit, immutable install).
+    #[cfg(feature = "selfupdate")]
+    pub updater: Option<SelfUpdater>,
 }
 
 impl AppState {
@@ -222,9 +229,12 @@ async fn auth_change_password(
     Json(serde_json::json!({"message": "Password changed"})).into_response()
 }
 
-#[cfg(feature = "serve")]
+/// Build the REST API router. The share and update route groups are
+/// included only when their features are enabled; the rest of the
+/// surface is always present. Single source of truth — adding a new
+/// endpoint should not require touching four cfg-gated copies.
 pub fn create_router(state: Arc<AppState>) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/", get(ui_page))
         .route("/vue.js", get(vue_js))
         .route("/api/health", get(health))
@@ -237,34 +247,27 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             get(get_mount).put(update_mount).delete(delete_mount),
         )
         .route("/api/mounts/{id}/start", post(start_mount))
-        .route("/api/mounts/{id}/stop", post(stop_mount))
+        .route("/api/mounts/{id}/stop", post(stop_mount));
+
+    #[cfg(feature = "serve")]
+    let router = router
         .route("/api/shares", get(list_shares).post(create_share))
         .route(
             "/api/shares/{id}",
             get(get_share).put(update_share).delete(delete_share),
         )
         .route("/api/shares/{id}/start", post(start_share))
-        .route("/api/shares/{id}/stop", post(stop_share))
-        .with_state(state.clone())
-        .layer(middleware::from_fn_with_state(state, auth_middleware))
-}
+        .route("/api/shares/{id}/stop", post(stop_share));
 
-#[cfg(not(feature = "serve"))]
-pub fn create_router(state: Arc<AppState>) -> Router {
-    Router::new()
-        .route("/", get(ui_page))
-        .route("/vue.js", get(vue_js))
-        .route("/api/health", get(health))
-        .route("/api/version", get(version))
-        .route("/api/auth/login", post(auth_login))
-        .route("/api/auth/password", post(auth_change_password))
-        .route("/api/mounts", get(list_mounts).post(create_mount))
-        .route(
-            "/api/mounts/{id}",
-            get(get_mount).put(update_mount).delete(delete_mount),
-        )
-        .route("/api/mounts/{id}/start", post(start_mount))
-        .route("/api/mounts/{id}/stop", post(stop_mount))
+    #[cfg(feature = "selfupdate")]
+    let router = router
+        .route("/api/update/version", get(update_version))
+        .route("/api/update/check", get(update_check))
+        .route("/api/update/apply", post(update_apply))
+        .route("/api/update/restart", post(update_restart))
+        .route("/api/update/progress", get(update_progress));
+
+    router
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(state, auth_middleware))
 }
@@ -730,6 +733,168 @@ fn create_backend(
     Err(format!("Unsupported protocol: {url}"))
 }
 
+// ---------------------------------------------------------------------------
+// Self-update endpoints (feature = "selfupdate")
+// ---------------------------------------------------------------------------
+
+/// How long the `/api/update/restart` handler waits before execv'ing,
+/// to give the client time to receive the 200 OK response.
+#[cfg(feature = "selfupdate")]
+const RESTART_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(150);
+
+#[cfg(feature = "selfupdate")]
+fn internal_error(msg: impl Into<String>) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(error_json(&msg.into())),
+    )
+}
+
+#[cfg(feature = "selfupdate")]
+fn upstream_error(msg: impl Into<String>) -> (StatusCode, Json<serde_json::Value>) {
+    // Bad Gateway: the local code is fine, the remote manifest host
+    // is what failed.
+    (StatusCode::BAD_GATEWAY, Json(error_json(&msg.into())))
+}
+
+#[cfg(feature = "selfupdate")]
+fn bad_request(msg: impl Into<String>) -> (StatusCode, Json<serde_json::Value>) {
+    (StatusCode::BAD_REQUEST, Json(error_json(&msg.into())))
+}
+
+#[cfg(feature = "selfupdate")]
+async fn update_version(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let Some(updater) = state.updater.as_ref() else {
+        return internal_error("self-update is not configured for this binary").into_response();
+    };
+    Json(UpdateInfo::from_updater(updater)).into_response()
+}
+
+#[cfg(feature = "selfupdate")]
+async fn update_check(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let Some(updater) = state.updater.as_ref() else {
+        return internal_error("self-update is not configured for this binary").into_response();
+    };
+    // `check()` performs a blocking HTTP request; off-load it from the
+    // async runtime so we don't stall other tasks.
+    let updater = updater.clone();
+    let current = updater.current_version().to_string();
+    let result = tokio::task::spawn_blocking(move || updater.check()).await;
+    match result {
+        Ok(Ok(Some(release))) => {
+            let asset_size = release
+                .asset_for_current_platform()
+                .map(|a| a.size)
+                .unwrap_or(0);
+            Json(serde_json::json!({
+                "available": true,
+                "current": current,
+                "latest": release.version,
+                "date": release.date,
+                "size": asset_size,
+            }))
+            .into_response()
+        }
+        Ok(Ok(None)) => Json(serde_json::json!({
+            "available": false,
+            "current": current,
+            "latest": current,
+        }))
+        .into_response(),
+        Ok(Err(e)) => upstream_error(format!("check failed: {e}")).into_response(),
+        Err(e) => internal_error(format!("internal task error: {e}")).into_response(),
+    }
+}
+
+#[cfg(feature = "selfupdate")]
+async fn update_apply(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let Some(updater) = state.updater.as_ref() else {
+        return internal_error("self-update is not configured for this binary").into_response();
+    };
+    let updater_check = updater.clone();
+    let current = updater.current_version().to_string();
+    let check_result = tokio::task::spawn_blocking(move || updater_check.check()).await;
+    let release = match check_result {
+        Ok(Ok(Some(r))) => r,
+        Ok(Ok(None)) => {
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "applied": false,
+                    "reason": "already up to date",
+                    "current": current,
+                    "latest": current,
+                })),
+            )
+                .into_response();
+        }
+        Ok(Err(e)) => return upstream_error(format!("check failed: {e}")).into_response(),
+        Err(e) => return internal_error(format!("internal task error: {e}")).into_response(),
+    };
+    let updater_apply = updater.clone();
+    let version = release.version.clone();
+    let apply_result = tokio::task::spawn_blocking(move || updater_apply.apply(&release)).await;
+    match apply_result {
+        Ok(Ok(())) => Json(serde_json::json!({
+            "applied": true,
+            "version": version,
+            "current": current,
+            "restart_required": true,
+            "note": "binary replaced on disk; call POST /api/update/restart to reload the process",
+        }))
+        .into_response(),
+        Ok(Err(e)) => upstream_error(format!("apply failed: {e}")).into_response(),
+        Err(e) => internal_error(format!("internal task error: {e}")).into_response(),
+    }
+}
+
+#[cfg(feature = "selfupdate")]
+async fn update_restart(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let Some(updater) = state.updater.as_ref() else {
+        return internal_error("self-update is not configured for this binary").into_response();
+    };
+    // `do_restart()` needs a cached exe path populated by a prior
+    // `apply()` call. If the user restarts without applying first we
+    // surface a clear 400 rather than 200-OK-with-silent-failure.
+    if !updater.has_pending_update() {
+        return bad_request(
+            "no pending update — POST /api/update/apply first and wait for 200 OK before restarting",
+        )
+        .into_response();
+    }
+    // Detach onto a dedicated OS thread (not a tokio task) so the
+    // restart runs even if the async runtime is being torn down for
+    // graceful shutdown. Tokio tasks can be cancelled mid-sleep, which
+    // would leave the binary replaced on disk but the process still
+    // running the old image.
+    let updater = updater.clone();
+    std::thread::spawn(move || {
+        // Brief sleep so the client receives the 200 OK before execv
+        // tears the process down.
+        std::thread::sleep(RESTART_GRACE_PERIOD);
+        if let Err(e) = updater.do_restart() {
+            tracing::error!("self-update restart failed: {e}");
+        }
+    });
+    Json(serde_json::json!({
+        "restarting": true,
+        "note": format!(
+            "process will exit and respawn in {}ms; reconnect shortly",
+            RESTART_GRACE_PERIOD.as_millis()
+        ),
+    }))
+    .into_response()
+}
+
+#[cfg(feature = "selfupdate")]
+async fn update_progress(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let Some(updater) = state.updater.as_ref() else {
+        return internal_error("self-update is not configured for this binary").into_response();
+    };
+    let snap = updater.progress_snapshot();
+    Json(snap).into_response()
+}
+
 /// True iff `url` resolves to a backend feature that is compiled in.
 fn is_supported_protocol(url: &str) -> bool {
     let protocol = crate::backend::detect_protocol(url);
@@ -766,6 +931,8 @@ mod tests {
             shares: ShareManager::new(),
             auth: Mutex::new(AuthConfig::default()),
             persist_path: PathBuf::from("/tmp/nonexistent-test-config"),
+            #[cfg(feature = "selfupdate")]
+            updater: None,
         });
         create_router(state)
     }
@@ -903,6 +1070,8 @@ mod tests {
             shares: ShareManager::new(),
             auth: Mutex::new(auth),
             persist_path: PathBuf::from("/tmp/nonexistent-test-config"),
+            #[cfg(feature = "selfupdate")]
+            updater: None,
         });
         create_router(state)
     }
@@ -965,5 +1134,351 @@ mod tests {
             .unwrap();
         let resp2 = app2.oneshot(req2).await.unwrap();
         assert_eq!(resp2.status(), StatusCode::OK);
+    }
+
+    // -----------------------------------------------------------------
+    // Self-update API tests
+    // -----------------------------------------------------------------
+
+    #[cfg(feature = "selfupdate")]
+    fn test_app_with_updater(updater: Option<crate::selfupdate::SelfUpdater>) -> Router {
+        let auth = AuthConfig::default();
+        let state = Arc::new(AppState {
+            mounts: MountManager::new(),
+            #[cfg(feature = "serve")]
+            shares: ShareManager::new(),
+            auth: Mutex::new(auth),
+            persist_path: PathBuf::from("/tmp/nonexistent-test-config"),
+            updater,
+        });
+        create_router(state)
+    }
+
+    /// When the updater is `None` (e.g. binary installed from a read-only
+    /// mount), the endpoints must surface a 500 with a clear error rather
+    /// than panic or 404.
+    #[cfg(feature = "selfupdate")]
+    #[tokio::test]
+    async fn test_update_version_without_updater() {
+        let app = test_app_with_updater(None);
+        let req = Request::builder()
+            .uri("/api/update/version")
+            .header("authorization", basic_auth_header("admin", "admin"))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// /api/update/check against a loopback manifest server — verifies
+    /// the full check() → HTTP → handler → JSON path.
+    ///
+    /// NOT `#[tokio::test]`: `reqwest::blocking::Client` (inside
+    /// `SelfUpdater`) panics if its `Drop` runs in an async context. We
+    /// build a single-thread runtime, run the request, drop the runtime,
+    /// THEN let the `SelfUpdater` value (held in `updater_keepalive`) go
+    /// out of scope on the regular test thread.
+    #[cfg(feature = "selfupdate")]
+    #[test]
+    fn test_update_check_against_loopback() {
+        use crate::selfupdate::{SelfUpdateConfig, SelfUpdater};
+        use selfupdater::Asset;
+        use std::collections::HashMap;
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let mut assets = HashMap::new();
+        assets.insert(
+            selfupdater::Release::current_platform(),
+            Asset {
+                url: "http://127.0.0.1:1/binary".into(),
+                sha256: "0".repeat(64),
+                size: 100,
+                signature: None,
+            },
+        );
+        let manifest = selfupdater::Release {
+            version: "999.0.0".into(),
+            date: "2026-01-01".into(),
+            assets,
+        };
+        let body = serde_json::to_vec(&manifest).unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(&body);
+                let _ = stream.flush();
+            }
+        });
+
+        let cfg = SelfUpdateConfig {
+            manifest_url: format!("http://{addr}/latest.json"),
+            public_key: None,
+            timeout: Some(std::time::Duration::from_secs(5)),
+            retries: Some(0),
+        };
+        // `updater_keepalive` holds a strong reference so the underlying
+        // reqwest client is only dropped after the test thread leaves
+        // the tokio runtime context.
+        let updater_keepalive = SelfUpdater::new("0.0.1", cfg).unwrap();
+        let app = test_app_with_updater(Some(updater_keepalive.clone()));
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let v: serde_json::Value = rt.block_on(async move {
+            let req = Request::builder()
+                .uri("/api/update/check")
+                .header("authorization", basic_auth_header("admin", "admin"))
+                .body(Body::empty())
+                .unwrap();
+            let resp = app.oneshot(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            let body_bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+            serde_json::from_slice(&body_bytes).unwrap()
+        });
+        // Shut down the runtime *before* `updater_keepalive` drops so the
+        // reqwest internal runtime tears down on a non-async thread.
+        drop(rt);
+        drop(updater_keepalive);
+
+        assert_eq!(v["available"], true);
+        assert_eq!(v["latest"], "999.0.0");
+        assert_eq!(v["current"], "0.0.1");
+
+        let _ = server.join();
+    }
+
+    /// Progress endpoint is safe to poll repeatedly and returns a stable
+    /// shape (even when no download is in flight). Same Drop dance as
+    /// the loopback test above.
+    #[cfg(feature = "selfupdate")]
+    #[test]
+    fn test_update_progress_shape() {
+        use crate::selfupdate::{SelfUpdateConfig, SelfUpdater};
+
+        let cfg = SelfUpdateConfig {
+            manifest_url: "http://127.0.0.1:1/latest.json".into(),
+            public_key: None,
+            timeout: Some(std::time::Duration::from_secs(1)),
+            retries: Some(0),
+        };
+        let updater_keepalive = SelfUpdater::new("1.0.0", cfg).unwrap();
+        let app = test_app_with_updater(Some(updater_keepalive.clone()));
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let v: serde_json::Value = rt.block_on(async move {
+            let req = Request::builder()
+                .uri("/api/update/progress")
+                .header("authorization", basic_auth_header("admin", "admin"))
+                .body(Body::empty())
+                .unwrap();
+            let resp = app.oneshot(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            let body_bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+            serde_json::from_slice(&body_bytes).unwrap()
+        });
+        drop(rt);
+        drop(updater_keepalive);
+
+        assert_eq!(v["active"], false);
+        assert_eq!(v["phase"], "");
+        assert_eq!(v["percent"], 0);
+        assert_eq!(v["downloaded"], 0);
+        assert_eq!(v["total"], 0);
+        // `error` is `skip_serializing_if = "Option::is_none"`, so it
+        // must be absent when there is no error.
+        assert!(v.get("error").is_none());
+    }
+
+    /// `/api/update/restart` MUST return 400 (not 200) when no prior
+    /// `apply()` has happened. Otherwise the client would see "restarting"
+    /// and reconnect, only to find the old binary still running.
+    #[cfg(feature = "selfupdate")]
+    #[test]
+    fn test_update_restart_no_pending_returns_400() {
+        use crate::selfupdate::{SelfUpdateConfig, SelfUpdater};
+
+        let cfg = SelfUpdateConfig {
+            manifest_url: "http://127.0.0.1:1/latest.json".into(),
+            public_key: None,
+            timeout: Some(std::time::Duration::from_secs(1)),
+            retries: Some(0),
+        };
+        let updater_keepalive = SelfUpdater::new("1.0.0", cfg).unwrap();
+        let app = test_app_with_updater(Some(updater_keepalive.clone()));
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let status = rt.block_on(async move {
+            let req = Request::builder()
+                .method("POST")
+                .uri("/api/update/restart")
+                .header("authorization", basic_auth_header("admin", "admin"))
+                .body(Body::empty())
+                .unwrap();
+            let resp = app.oneshot(req).await.unwrap();
+            resp.status()
+        });
+        drop(rt);
+        drop(updater_keepalive);
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    /// Auth gating for the full self-update endpoint surface: missing
+    /// credentials must produce 401, not 200/500. This is a regression
+    /// guard — the `update_*` routes were added in a single batch and
+    /// are easy to forget.
+    ///
+    /// NOT `#[tokio::test]`: see the Drop-dance note in
+    /// `test_update_check_against_loopback`. The `SelfUpdater` holds a
+    /// `reqwest::blocking::Client` whose Drop panics in async context.
+    #[cfg(feature = "selfupdate")]
+    #[test]
+    fn test_update_endpoints_require_auth() {
+        use crate::selfupdate::{SelfUpdateConfig, SelfUpdater};
+
+        let cfg = SelfUpdateConfig {
+            manifest_url: "http://127.0.0.1:1/latest.json".into(),
+            public_key: None,
+            timeout: Some(std::time::Duration::from_secs(1)),
+            retries: Some(0),
+        };
+        let updater_keepalive = SelfUpdater::new("1.0.0", cfg).unwrap();
+        let app = test_app_with_updater(Some(updater_keepalive.clone()));
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let cases = [
+            ("GET", "/api/update/version"),
+            ("GET", "/api/update/check"),
+            ("POST", "/api/update/apply"),
+            ("POST", "/api/update/restart"),
+            ("GET", "/api/update/progress"),
+        ];
+        rt.block_on(async move {
+            for (method, uri) in cases {
+                let req = Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .body(Body::empty())
+                    .unwrap();
+                let resp = app.clone().oneshot(req).await.unwrap();
+                assert_eq!(
+                    resp.status(),
+                    StatusCode::UNAUTHORIZED,
+                    "{method} {uri} must require auth"
+                );
+            }
+        });
+        drop(rt);
+        drop(updater_keepalive);
+    }
+
+    /// `GET /api/update/check` against a manifest whose version is
+    /// older than (or equal to) the running version must report
+    /// `available: false` and a `latest` field that matches the
+    /// running version. The existing loopback test only covers the
+    /// "newer available" branch.
+    #[cfg(feature = "selfupdate")]
+    #[test]
+    fn test_update_check_already_up_to_date() {
+        use crate::selfupdate::{SelfUpdateConfig, SelfUpdater};
+        use selfupdater::Asset;
+        use std::collections::HashMap;
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let mut assets = HashMap::new();
+        assets.insert(
+            selfupdater::Release::current_platform(),
+            Asset {
+                url: "http://127.0.0.1:1/binary".into(),
+                sha256: "0".repeat(64),
+                size: 100,
+                signature: None,
+            },
+        );
+        // Same version as the running binary — `check()` returns None.
+        let manifest = selfupdater::Release {
+            version: "1.0.0".into(),
+            date: "2026-01-01".into(),
+            assets,
+        };
+        let body = serde_json::to_vec(&manifest).unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(&body);
+                let _ = stream.flush();
+            }
+        });
+
+        let cfg = SelfUpdateConfig {
+            manifest_url: format!("http://{addr}/latest.json"),
+            public_key: None,
+            timeout: Some(std::time::Duration::from_secs(5)),
+            retries: Some(0),
+        };
+        let updater_keepalive = SelfUpdater::new("1.0.0", cfg).unwrap();
+        let app = test_app_with_updater(Some(updater_keepalive.clone()));
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let v: serde_json::Value = rt.block_on(async move {
+            let req = Request::builder()
+                .uri("/api/update/check")
+                .header("authorization", basic_auth_header("admin", "admin"))
+                .body(Body::empty())
+                .unwrap();
+            let resp = app.oneshot(req).await.unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            let body_bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+            serde_json::from_slice(&body_bytes).unwrap()
+        });
+        drop(rt);
+        drop(updater_keepalive);
+
+        assert_eq!(v["available"], false);
+        assert_eq!(v["latest"], "1.0.0");
+        assert_eq!(v["current"], "1.0.0");
+
+        let _ = server.join();
     }
 }

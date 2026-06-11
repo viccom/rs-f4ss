@@ -12,11 +12,12 @@ name = "rs-f4ss"
 path = "src/main.rs"
 
 [features]
-default = ["webdav", "api"]
+default = ["webdav", "api", "selfupdate"]
 webdav = ["rs-f4ss-core/webdav"]
 http = ["rs-f4ss-core/http"]
 api = ["rs-f4ss-core/api", "dep:axum"]
 serve = ["rs-f4ss-core/serve", "dep:axum"]
+selfupdate = ["rs-f4ss-core/selfupdate"]
 
 [dependencies]
 rs-f4ss-core = { path = "../rs-f4ss-core" }

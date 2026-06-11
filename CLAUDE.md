@@ -136,7 +136,7 @@ desktop/src-tauri/src/
 
 - **cfg-gated dependencies**: `fuser` is only compiled on Linux, `winfsp` only on Windows. Core code (`mount.rs`, `error.rs`, `cache.rs`, etc.) compiles on all platforms.
 
-- **Feature flags**: Protocol backends and service capabilities are feature-gated. `default = ["webdav"]` preserves backward compatibility. `http` for static file servers, `api` for REST API + Web UI. `serve` for HTTP + WebDAV file sharing server (enables peer-to-peer file sharing between rs-f4ss instances).
+- **Feature flags**: Protocol backends and service capabilities are feature-gated. `default = ["webdav"]` preserves backward compatibility. `http` for static file servers, `api` for REST API + Web UI. `serve` for HTTP + WebDAV file sharing server (enables peer-to-peer file sharing between rs-f4ss instances). `selfupdate` for the in-process self-updater built on top of the `rs-selfupdater` library.
 
 - **Shared HttpClient**: `backend/common.rs` provides `HttpClient` with `build_url`, `send_with_retry`, `read_full_and_slice`, and `build_auth_header`. Both WebDAV and HTTP backends embed it, eliminating ~120 lines duplication.
 
@@ -159,6 +159,8 @@ desktop/src-tauri/src/
 - **Daemon mode (Linux)**: Without `-f` flag, forks to background via `libc::fork()` + `setsid()`. PID file and log file stored in `$XDG_STATE_DIR/rs-f4ss/`. CLI provides `list/add/del/start/stop` commands to manage mounts via REST API.
 
 - **File sharing server (`serve` feature)**: Serves local directories over HTTP (nginx autoindex) and WebDAV (PROPFIND). Output formats match `HttpBackend` and `WebDavBackend` client parsers for P2P round-trip. Zero coupling with mount/client code — `FileServerState` is self-contained. Supports Range requests (single range), Basic Auth, directory redirect, upload with 2GB limit. WebDAV: PROPFIND (Depth 0/1), MKCOL, MOVE, COPY, LOCK (pseudo), PROPPATCH (stub). CLI: `rs-f4ss share serve /path --listen :8080`.
+
+- **Self-updater (`selfupdate` feature)**: Thin wrapper around the standalone `rs-selfupdater` crate. `SelfUpdater` in `crates/rs-f4ss-core/src/selfupdate/mod.rs` owns an `Arc<selfupdater::Updater>` and is cheap to clone. Manifest format is `latest.json` (`{version, date, assets: {os/arch: {url, sha256, size, signature?}}}`); SHA256 is mandatory, Ed25519 (Minisign) verification is opt-in via `RS_F4SS_UPDATE_PUBKEY`. CLI: `rs-f4ss update version|check|apply [--no-restart]`. REST: `GET /api/update/version|check|progress`, `POST /api/update/apply|restart`. The blocking `check()` / `apply()` calls are wrapped in `tokio::task::spawn_blocking` to keep the runtime responsive. Apply uses `self_replace::self_replace` (Unix `rename`, Windows `MoveFileEx`); restart uses Unix `execv` (PID preserved) or Windows `CreateProcess`. CI's `release.yml` job generates `latest.json` from the bare-binary artifacts.
 
 - **Config persistence**: Mount configs saved to JSON file, restored on startup.
 
@@ -203,6 +205,6 @@ See `docs/TASKS.md` for detailed task breakdown and completion status.
 | E2E API | 43 |
 | Supported protocols | WebDAV, HTTP static |
 | Supported platforms | Linux (FUSE), Windows (WinFsp) |
-| Feature flags | `webdav`, `http`, `api`, `serve` |
-| REST API endpoints | 9 |
+| Feature flags | `webdav`, `http`, `api`, `serve`, `selfupdate` |
+| REST API endpoints | 9 (14 with `selfupdate`) |
 | Binary size (Linux CLI, stripped) | 6.9 MB |

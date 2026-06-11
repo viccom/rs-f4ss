@@ -21,6 +21,9 @@ api = ["dep:axum", "dep:tower-http", "dep:serde_json", "dep:dirs", "dep:sha2"]
 # File sharing server (HTTP + WebDAV)
 serve = ["dep:axum", "dep:tower-http", "dep:chrono", "dep:base64", "dep:serde_json", "dep:tokio-util", "dep:sha2"]
 
+# Self-updater (built on top of the rs-selfupdater library)
+selfupdate = ["dep:selfupdater", "dep:serde_json"]
+
 [dependencies]
 # Shared core deps — always compiled
 tokio.workspace = true
@@ -54,6 +57,9 @@ sha2 = { workspace = true, optional = true }
 
 # Serve feature
 tokio-util = { workspace = true, optional = true }
+
+# Self-updater
+selfupdater = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 fuser.workspace = true
