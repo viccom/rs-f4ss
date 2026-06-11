@@ -33,8 +33,10 @@ jobs:
         include:
           - target: rs-f4ss
             binary: rs-f4ss
+            package: rs-f4ss-cli
           - target: rs-f4ss-desktop
             binary: rs-f4ss-desktop
+            package: rs-f4ss-desktop
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -53,7 +55,7 @@ jobs:
             build-essential \
             file
       - name: cargo build --release
-        run: cargo build --release --all-features -p "${{ matrix.target }}"
+        run: cargo build --release --all-features -p "${{ matrix.package }}"
       - name: Stage binary + docs
         run: |
           mkdir -p staging
@@ -96,8 +98,10 @@ jobs:
         include:
           - target: rs-f4ss
             binary: rs-f4ss.exe
+            package: rs-f4ss-cli
           - target: rs-f4ss-desktop
             binary: rs-f4ss-desktop.exe
+            package: rs-f4ss-desktop
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -120,7 +124,7 @@ jobs:
           if ($proc.ExitCode -ne 0) { exit $proc.ExitCode }
       - name: cargo build --release
         shell: bash
-        run: cargo build --release --all-features -p "${{ matrix.target }}" --target x86_64-pc-windows-msvc
+        run: cargo build --release --all-features -p "${{ matrix.package }}" --target x86_64-pc-windows-msvc
       - name: Stage binary + docs
         shell: bash
         run: |
