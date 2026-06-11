@@ -156,8 +156,19 @@ impl SelfUpdater {
 
     /// Query the manifest for a newer release. Returns `None` when the
     /// running version is already the latest.
+    ///
+    /// Returns `Err(Error::NoAssetForPlatform { .. })` if the manifest
+    /// advertises a newer version but ships no asset for the current
+    /// OS/arch — the upstream `inner.check()` would otherwise return
+    /// `Some(release)` and trick the CLI into printing
+    /// "Update available (0 bytes)", which would then fail in `apply()`
+    /// with a less helpful message.
     pub fn check(&self) -> Result<Option<Release>, Error> {
-        self.inner.check()
+        let release = self.inner.check()?;
+        if let Some(r) = &release {
+            r.asset_for_current_platform()?;
+        }
+        Ok(release)
     }
 
     /// Download, validate, and atomically replace the running binary.
@@ -357,6 +368,71 @@ mod tests {
         let updater = SelfUpdater::new("0.0.1", cfg).expect("updater");
         let release = updater.check().expect("check").expect("newer release");
         assert_eq!(release.version, "99.0.0");
+
+        let _ = server.join();
+    }
+
+    /// If the manifest claims a newer version but ships no asset for the
+    /// current platform, `check()` must surface `NoAssetForPlatform`
+    /// rather than `Ok(Some(release))` — otherwise the CLI prints
+    /// "Update available (0 bytes)" and `apply()` later fails with a
+    /// less helpful error. Caught by the E2E run.
+    #[test]
+    fn check_errors_when_manifest_has_no_asset_for_current_platform() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        // Same manifest as `check_against_loopback_server`, but the
+        // platform key is wrong so `asset_for_current_platform()` must
+        // return `NoAssetForPlatform`.
+        let mut wrong_assets = HashMap::new();
+        wrong_assets.insert(
+            "plan9/mips".to_string(),
+            Asset {
+                url: "http://example.com/plan9".into(),
+                sha256: "0".repeat(64),
+                size: 100,
+                signature: None,
+            },
+        );
+        let manifest = Release {
+            version: "99.0.0".into(),
+            date: "2026-01-01".into(),
+            assets: wrong_assets,
+        };
+        let body = serde_json::to_vec(&manifest).unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(&body);
+                let _ = stream.flush();
+            }
+        });
+
+        let cfg = SelfUpdateConfig {
+            manifest_url: format!("http://{addr}/latest.json"),
+            public_key: None,
+            timeout: Some(Duration::from_secs(5)),
+            retries: Some(0),
+        };
+        let updater = SelfUpdater::new("0.0.1", cfg).expect("updater");
+        let err = updater
+            .check()
+            .expect_err("check must fail without an asset");
+        assert!(
+            matches!(err, Error::NoAssetForPlatform { .. }),
+            "got: {err}"
+        );
 
         let _ = server.join();
     }

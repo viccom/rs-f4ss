@@ -404,6 +404,16 @@ fn handle_update(
                     "sha256 only"
                 }
             );
+            // Surface the post-apply pending state so the operator can
+            // confirm `apply` succeeded without poking the REST API.
+            println!(
+                "  pending:    {}",
+                if info.pending_update {
+                    "yes — binary on disk is newer, restart to use it"
+                } else {
+                    "no"
+                }
+            );
         }
         UpdateAction::Check => {
             eprintln!("Checking {} …", updater.manifest_url());
