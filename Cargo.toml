@@ -42,4 +42,4 @@ sha2 = "0.10"
 dirs = "6"
 futures-util = "0.3"
 tokio-util = { version = "0.7", features = ["io"] }
-selfupdater = { path = "/root/gitme/rs-selfupdater", default-features = false, features = ["server", "tls-rustls"] }
+selfupdater = { git = "https://github.com/viccom/rs-selfupdater", rev = "3a329b6", default-features = false, features = ["server", "tls-rustls"] }
