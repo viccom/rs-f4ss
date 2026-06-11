@@ -1,0 +1,44 @@
+[package]
+name = "selfupdater"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Cross-platform binary self-updater for Rust with HTTPS, SHA256 and Ed25519/minisign signature verification"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/viccom/rs-selfupdater"
+homepage = "https://github.com/viccom/rs-selfupdater"
+documentation = "https://docs.rs/selfupdater"
+keywords = ["self-update", "updater", "binary", "minisign", "cli"]
+categories = ["development-tools", "command-line-utilities"]
+
+[dependencies]
+self-replace = "1.5"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json"] }
+sha2 = "0.10"
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+tracing = "0.1"
+thiserror = "2"
+minisign-verify = "0.2"
+axum = { version = "0.7", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
+
+[features]
+# `default` keeps native-tls to preserve the previous behavior for
+# downstream consumers that don't pin a TLS backend. Consumers wanting
+# rustls-tls (e.g. workspaces that already standardize on rustls) should
+# opt in with `default-features = false, features = ["tls-rustls", ...]`.
+default = ["tls-native"]
+server = ["axum", "tokio"]
+tls-native = ["reqwest/default-tls"]
+tls-rustls = ["reqwest/rustls-tls"]
+
+[dev-dependencies]
+tracing-subscriber = "0.3"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

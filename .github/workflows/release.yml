@@ -53,10 +53,7 @@ jobs:
             build-essential \
             file
       - name: cargo build --release
-        # Explicit feature list (not `--all-features`): the `selfupdater`
-        # git dep is outside the workspace, so cargo refuses `--all-features`
-        # on a `-p` that pulls in non-workspace members.
-        run: cargo build --release --features webdav,http,api,serve,selfupdate -p "${{ matrix.target }}"
+        run: cargo build --release --all-features -p "${{ matrix.target }}"
       - name: Stage binary + docs
         run: |
           mkdir -p staging
@@ -123,10 +120,7 @@ jobs:
           if ($proc.ExitCode -ne 0) { exit $proc.ExitCode }
       - name: cargo build --release
         shell: bash
-        # Explicit feature list (not `--all-features`): the `selfupdater`
-        # git dep is outside the workspace, so cargo refuses `--all-features`
-        # on a `-p` that pulls in non-workspace members.
-        run: cargo build --release --features webdav,http,api,serve,selfupdate -p "${{ matrix.target }}" --target x86_64-pc-windows-msvc
+        run: cargo build --release --all-features -p "${{ matrix.target }}" --target x86_64-pc-windows-msvc
       - name: Stage binary + docs
         shell: bash
         run: |

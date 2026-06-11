@@ -46,7 +46,7 @@ jobs:
             libssl-dev \
             build-essential \
             file
-      - run: cargo clippy --all-targets --features webdav,http,api,serve,selfupdate -- -W clippy::all
+      - run: cargo clippy --all-targets --all-features -- -W clippy::all
 
   # ─────────────────────────────────────────────────────────────────────
   # Unit / integration tests across the feature matrix
@@ -82,11 +82,7 @@ jobs:
       - name: Run tests
         run: |
           if [ "${{ matrix.features }}" = "webdav" ]; then
-            # The `selfupdater` git dep lives outside the workspace, so
-            # `--all-features` (which would try to flip features on it)
-            # is replaced with an explicit feature list. WebDAV alone is
-            # the original "default" set + the selfupdate feature.
-            cargo test --features webdav,http,api,serve,selfupdate
+            cargo test --all-features
           else
             cargo test --no-default-features --features "${{ matrix.features }}"
           fi
@@ -146,9 +142,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "${{ github.workspace }}\target\debug\deps" | Out-Null
           Copy-Item $src -Destination "${{ github.workspace }}\target\debug\deps\winfsp-x64.dll" -Force
       - name: Run tests
-        # Explicit feature list: `--all-features` would fail because
-        # the `selfupdater` git dep is outside the workspace.
-        run: cargo test --features webdav,http,api,serve,selfupdate
+        run: cargo test --all-features
         env:
           RUST_LOG: rs_f4ss=warn
 
@@ -251,9 +245,7 @@ jobs:
             build-essential \
             file
       - name: Build release binary
-        # Explicit feature list: `--all-features` would fail because
-        # the `selfupdater` git dep is outside the workspace.
-        run: cargo build --release --features webdav,http,api,serve,selfupdate
+        run: cargo build --release --all-features
       - name: Run E2E (FUSE mount)
         run: bash tests/e2e.sh
       - name: Run E2E (REST API)
