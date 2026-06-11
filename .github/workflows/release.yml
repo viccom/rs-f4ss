@@ -137,7 +137,11 @@ jobs:
           BINARY: ${{ matrix.binary }}
         run: |
           cd staging
-          tar -czf "../${BINARY}-${TAG}-x86_64-pc-windows-msvc.tar.gz" .
+          # Archive name drops the .exe suffix on Windows so the asset
+          # pattern stays consistent with the v0.2.0 release convention
+          # (rs-f4ss-vX.Y.Z-…, not rs-f4ss.exe-vX.Y.Z-…).
+          ARCHIVE="${BINARY%.exe}"
+          tar -czf "../${ARCHIVE}-${TAG}-x86_64-pc-windows-msvc.tar.gz" .
       - name: Stage bare binary for self-update (CLI only)
         if: matrix.target == 'rs-f4ss'
         shell: bash
