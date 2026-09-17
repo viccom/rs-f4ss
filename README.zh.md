@@ -116,8 +116,13 @@ fusermount -u /mnt/remote   # 用完后卸载
 ### 分享本地目录
 
 ```bash
-# 在 8080 端口通过 HTTP + WebDAV 暴露一个目录
-rs-f4ss share serve ~/Documents --listen :8080 --allow-all
+# 在 8080 端口通过 HTTP + WebDAV 暴露一个目录（默认仅绑定 127.0.0.1:8080）
+rs-f4ss share serve ~/Documents --listen 127.0.0.1:8080
+
+# 需要对局域网/外网开放时，显式绑定并加上认证：
+rs-f4ss share serve ~/Documents --listen 0.0.0.0:8080 --user me --pass secret
+# 非 loopback 地址且未提供 --user/--pass 时启动会打印醒目警告：
+# 目录对任何能访问该地址的人可读可写。
 
 # 浏览器打开 http://localhost:8080
 # 或从另一台机器挂载它:

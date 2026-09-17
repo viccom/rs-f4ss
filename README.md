@@ -119,8 +119,13 @@ fusermount -u /mnt/remote   # unmount when done
 ### Share a local directory
 
 ```bash
-# Serve a directory over HTTP + WebDAV on port 8080
-rs-f4ss share serve ~/Documents --listen :8080 --allow-all
+# Serve a directory over HTTP + WebDAV (binds to 127.0.0.1:8080 by default)
+rs-f4ss share serve ~/Documents --listen 127.0.0.1:8080
+
+# To expose it on the network, bind explicitly — and add auth:
+rs-f4ss share serve ~/Documents --listen 0.0.0.0:8080 --user me --pass secret
+# Binding a non-loopback address without --user/--pass prints a loud warning:
+# the directory is readable and writable by anyone who can reach it.
 
 # Open http://localhost:8080 in a browser
 # Or mount it from another machine:
