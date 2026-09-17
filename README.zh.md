@@ -11,8 +11,8 @@
 [![CI](https://github.com/viccom/rs-f4ss/actions/workflows/ci.yml/badge.svg)](https://github.com/viccom/rs-f4ss/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](Cargo.toml)
-[![Tests](https://img.shields.io/badge/tests-205%2B%20passing-brightgreen.svg)](#测试)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](Cargo.toml)
+[![Tests](https://img.shields.io/badge/tests-305%2B%20passing-brightgreen.svg)](#测试)
 [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20Windows-lightgrey.svg)](#支持的协议与平台)
 
 [快速开始](#-快速开始) •
@@ -363,7 +363,7 @@ cargo xwin build --release -p rs-f4ss-desktop \
 
 ```bash
 # 单元测试(无需 FUSE,速度快)
-cargo test --all-features                     # 205+ 个测试
+cargo test --all-features                     # 305+ 个测试
 cargo test --lib -- cache                    # 运行名称包含 "cache" 的测试
 cargo test test_parse_propfind -- --nocapture # 跑单个测试,带输出
 
@@ -387,10 +387,10 @@ powershell -File tests/e2e.ps1
 
 | 套件 | 数量 |
 |------|-----:|
-| 单元测试(lib + bins,全特性) | 205+ |
+| 单元测试(lib + bins,全特性) | 305+ |
 | E2E bash(Linux FUSE) | 51 |
 | E2E PowerShell(Windows WinFsp) | 51 |
-| E2E API | 43 |
+| E2E API | 55 |
 
 ---
 
@@ -412,7 +412,7 @@ powershell -File tests/e2e.ps1
 
 | 变量 | 作用 |
 |------|------|
-| `DUFS_MOUNT_PASSWORD` | 密码(覆盖 `--pass`,便于 CI 使用) |
+| `RS_F4SS_PASSWORD` | 挂载密码兜底(`--pass`/`--pass-file` 缺省时生效;`--pass` 优先) |
 | `RUST_LOG` | tracing-subscriber 过滤,例如 `rs_f4ss=debug,fuser=info` |
 | `XDG_STATE_DIR` | 守护进程存储 PID 与日志文件的目录 |
 | `RS_F4SS_UPDATE_URL` | 自升级清单 URL(默认指向最新 GitHub release) |
@@ -420,7 +420,10 @@ powershell -File tests/e2e.ps1
 ### 挂载配置持久化
 
 通过 API 启动时,挂载配置会持久化到
-`$XDG_STATE_DIR/rs-f4ss/mounts.json`,下次启动时自动恢复。
+`<config dir>/rs-f4ss/config.json`(Windows 为 `%APPDATA%/rs-f4ss/config.json`,
+Linux 为 `~/.config/rs-f4ss/config.json`),下次启动时自动恢复。
+**注意:**挂载密码以**明文**存储在该文件中;权限收紧(0600)仅限 Unix,
+Windows 不做 ACL 加固,请自行保护好该文件。
 
 ---
 
@@ -477,8 +480,8 @@ TDD 工作流、Conventional Commits 提交规范,以及 PR 流程。
 
 | 指标 | 数值 |
 |------|-----:|
-| 源代码行数(core + cli + desktop) | ~8,800 |
-| Crate 数量 | 3 |
+| 源代码行数(整个 workspace,Rust) | ~16,100 |
+| Crate 数量 | 4 |
 | Feature flag 数量 | 5 |
 | REST API 端点数 | 9 |
 | 二进制体积(Linux CLI,stripped) | 7.4 MB |

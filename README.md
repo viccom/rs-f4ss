@@ -12,8 +12,8 @@ peer-to-peer file sharing between rs-f4ss instances.
 [![CI](https://github.com/viccom/rs-f4ss/actions/workflows/ci.yml/badge.svg)](https://github.com/viccom/rs-f4ss/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](Cargo.toml)
-[![Tests](https://img.shields.io/badge/tests-205%2B%20passing-brightgreen.svg)](#testing)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](Cargo.toml)
+[![Tests](https://img.shields.io/badge/tests-305%2B%20passing-brightgreen.svg)](#testing)
 [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20Windows-lightgrey.svg)](#supported-platforms)
 
 [Quick Start](#-quick-start) •
@@ -368,7 +368,7 @@ We follow strict TDD. Every feature starts with a failing test.
 
 ```bash
 # Unit tests (no FUSE required, fast)
-cargo test --all-features                     # 205+ tests
+cargo test --all-features                     # 305+ tests
 cargo test --lib -- cache                    # all tests matching "cache"
 cargo test test_parse_propfind -- --nocapture # one test, with output
 
@@ -392,10 +392,10 @@ See [docs/TDD.md](docs/TDD.md) for our test methodology, and
 
 | Suite | Count |
 |-------|------:|
-| Unit tests (lib + bins, all features) | 205+ |
+| Unit tests (lib + bins, all features) | 305+ |
 | E2E bash (Linux FUSE) | 51 |
 | E2E PowerShell (Windows WinFsp) | 51 |
-| E2E API | 43 |
+| E2E API | 55 |
 
 ---
 
@@ -417,7 +417,7 @@ See [docs/TDD.md](docs/TDD.md) for our test methodology, and
 
 | Var | Effect |
 |-----|--------|
-| `DUFS_MOUNT_PASSWORD` | Password (overrides `--pass`, useful in CI) |
+| `RS_F4SS_PASSWORD` | Mount password fallback (used when `--pass`/`--pass-file` are absent; `--pass` takes precedence) |
 | `RUST_LOG` | tracing-subscriber filter, e.g. `rs_f4ss=debug,fuser=info` |
 | `XDG_STATE_DIR` | Where the daemon stores PID + log files |
 | `RS_F4SS_UPDATE_URL` | Self-update manifest URL (default: latest GitHub release) |
@@ -425,7 +425,11 @@ See [docs/TDD.md](docs/TDD.md) for our test methodology, and
 ### Mount config persistence
 
 When started via the API, mount configurations are persisted to
-`$XDG_STATE_DIR/rs-f4ss/mounts.json` and auto-restored on next launch.
+`<config dir>/rs-f4ss/config.json` (e.g. `%APPDATA%/rs-f4ss/config.json` on
+Windows, `~/.config/rs-f4ss/config.json` on Linux) and auto-restored on next
+launch. **Note:** mount passwords are stored in that file **in plaintext**;
+permissions are tightened to 0600 on Unix only — on Windows no ACL hardening
+is applied, so protect the file accordingly.
 
 ---
 
@@ -483,8 +487,8 @@ Before submitting a PR, make sure:
 
 | Metric | Value |
 |--------|------:|
-| Source lines (core + cli + desktop) | ~8,800 |
-| Crates | 3 |
+| Source lines (workspace, Rust) | ~16,100 |
+| Crates | 4 |
 | Feature flags | 5 |
 | REST API endpoints | 9 |
 | Binary size (Linux CLI, stripped) | 7.4 MB |

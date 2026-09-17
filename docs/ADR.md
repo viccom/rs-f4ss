@@ -72,8 +72,14 @@ Use **moka 0.12** with async `future` feature for the metadata cache layer.
 
 ## ADR-003 — Write Strategy: Full-File Upload over Chunked Transfer
 
-- **Status**: Accepted
+- **Status**: Superseded (partially) by ADR-011
 - **Date**: 2026-05-30
+
+> **Superseded note (2026-09-17):** the read path described as "full-file
+> download only" no longer holds — HTTP Range-based chunked reads with a
+> full-download fallback shipped in the HTTP/WebDAV backends (see
+> `backend/http.rs`, `backend/webdav.rs`) and are governed by ADR-011.
+> The write-strategy decision (buffered full PUT on flush) is unchanged.
 
 ### Context
 
@@ -134,8 +140,13 @@ Phase 1 uses **full-file upload**: buffer all writes in memory, upload entire fi
 
 ## ADR-005 — Cache Scope: Metadata Only, No File Content Caching
 
-- **Status**: Accepted
+- **Status**: Superseded by ADR-011
 - **Date**: 2026-05-30
+
+> **Superseded note (2026-09-17):** adaptive read-ahead prefetch (the
+> "Future: Phase 4" option below) has shipped — see ADR-011
+> (`prefetch.rs`) and the Range-based chunked reads in
+> `backend/http.rs` / `backend/webdav.rs`.
 
 ### Context
 
@@ -176,20 +187,23 @@ Phase 2 adds S3 backend, REST API, and WebDAV Server. Not all deployments need a
 Use Cargo feature flags with a layered design:
 
 ```
-default = ["webdav"]                    # Backward-compatible
+default = ["webdav"]
 
 # Protocol backends (orthogonal)
-webdav  = ["reqwest", "quick-xml", "base64", "chrono"]
-s3     = ["reqwest", "quick-xml", "chrono", "hmac", "sha2", "hex"]
-
-# Mount capabilities (platform-gated)
-fuse-mount   = ["fuser"]               # Linux
-winfsp-mount = ["winfsp"]              # Windows
+webdav = ["dep:reqwest", "dep:quick-xml", "dep:base64", "dep:chrono"]
+http   = ["dep:reqwest", "dep:base64", "dep:chrono"]
+s3     = ["dep:reqwest", "dep:quick-xml", "dep:chrono"]
 
 # Service capabilities
-api    = ["axum", "tower-http", "serde_json"]
-server = ["axum", "tower-http", "quick-xml"]
+api        = ["dep:axum", "dep:tower-http", "dep:serde_json", "dep:dirs", "dep:sha2", "dep:rand"]
+serve      = ["dep:axum", "dep:tower-http", "dep:chrono", "dep:base64", "dep:serde_json", "dep:tokio-util", "dep:sha2", "dep:rand", "dep:dirs"]
+selfupdate = ["dep:selfupdater", "dep:serde_json"]
 ```
+
+> Mount capabilities are not feature-gated: the FUSE (Linux) and WinFsp
+> (Windows) implementations are selected by `#[cfg(target_os = ...)]` in
+> `lib.rs` — see the `[target.'cfg(...)'.dependencies]` sections of
+> `crates/rs-f4ss-core/Cargo.toml` for the authoritative list.
 
 ### Alternatives Considered
 
@@ -390,7 +404,7 @@ Add `serve` feature flag implementing an embedded HTTP + WebDAV file server. The
 | ADR-004 | Dispatch Model: Hybrid dynamic/static | Accepted | 2026-05-30 |
 | ADR-005 | Cache Scope: Metadata only | Accepted | 2026-05-30 |
 | ADR-006 | Feature Flags for Modular Compilation | Accepted | 2026-06-02 |
-| ADR-007 | REST API for Dynamic Mount Management | Accepted | 2026-06-04 |
+| ADR-007 | REST API for Dynamic Mount Management | Proposed | 2026-06-02 |
 | ADR-008 | WebDAV Server as Protocol Aggregator | Proposed | 2026-06-02 |
 | ADR-009 | FUSE Kernel Cache TTL: 60s | Accepted | 2026-06-04 |
 | ADR-010 | Tauri Desktop over Custom GUI | Accepted | 2026-06-04 |
