@@ -25,7 +25,7 @@ reqwest = { version = "0.12", features = ["rustls-tls", "stream"], default-featu
 quick-xml = "0.36"
 thiserror = "1"
 clap = { version = "4", features = ["derive", "env"] }
-fuser = { git = "https://github.com/cberner/fuser", branch = "master" }
+fuser = { git = "https://github.com/cberner/fuser", rev = "35732aad757661c4d1bdc8993d6c110576197690" }
 dashmap = "6"
 moka = { version = "0.12", features = ["future"] }
 tracing = "0.1"
