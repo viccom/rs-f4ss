@@ -115,6 +115,12 @@ stop_dufs() {
 
 start_api() {
     info "Starting rs-f4ss serve on :$API_PORT"
+    # Start from a pristine persistent store: a config.json left over from a
+    # previous run makes restore_entries recreate the mount entries and the
+    # create tests below collide with 409s. Also clean it up on exit.
+    CONFIG_DIR="$(dirname "$(dirname "$(command -v rs-f4ss 2>/dev/null || true)")")"
+    E2E_CONFIG="$HOME/.config/rs-f4ss/config.json"
+    rm -f "$E2E_CONFIG"
     $DUFS_MOUNT_BIN serve --listen "127.0.0.1:$API_PORT" > /tmp/rs-f4ss-api-e2e.log 2>&1 &
     API_PID=$!
     sleep 1
@@ -151,6 +157,9 @@ cleanup() {
     for mp in /tmp/dufs-api-test-*; do
         rmdir "$mp" 2>/dev/null || true
     done
+    # Drop mounts persisted during this run so the next run starts clean
+    # (create tests collide with 409s if restore_entries brings them back).
+    rm -f "$E2E_CONFIG" 2>/dev/null || true
 }
 
 trap cleanup EXIT
