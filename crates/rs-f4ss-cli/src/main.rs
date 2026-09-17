@@ -104,9 +104,6 @@ enum Commands {
         /// Override the manifest URL (default: GitHub releases/latest/download/latest.json)
         #[arg(long, env = "RS_F4SS_UPDATE_URL")]
         manifest_url: Option<String>,
-        /// Optional minisign public key for signature verification
-        #[arg(long, env = "RS_F4SS_UPDATE_PUBKEY")]
-        public_key: Option<String>,
     },
 }
 
@@ -376,16 +373,12 @@ fn build_default_updater() -> Option<rs_f4ss_core::selfupdate::SelfUpdater> {
 fn handle_update(
     action: &UpdateAction,
     manifest_url: Option<&str>,
-    public_key: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use rs_f4ss_core::selfupdate::{SelfUpdateConfig, SelfUpdater, UpdateInfo};
 
     let mut config = SelfUpdateConfig::from_env();
     if let Some(url) = manifest_url {
         config.manifest_url = url.to_string();
-    }
-    if let Some(key) = public_key {
-        config.public_key = Some(key.to_string());
     }
 
     let updater = SelfUpdater::new(env!("CARGO_PKG_VERSION"), config)?;
@@ -400,14 +393,7 @@ fn handle_update(
                 "  exe:        {}",
                 info.exe_path.as_deref().unwrap_or("<unknown>")
             );
-            println!(
-                "  signature:  {}",
-                if info.public_key_configured {
-                    "verified (minisign)"
-                } else {
-                    "sha256 only"
-                }
-            );
+            println!("  integrity:  sha256 (update channel: HTTPS manifest)");
             // Surface the post-apply pending state so the operator can
             // confirm `apply` succeeded without poking the REST API.
             println!(
@@ -604,8 +590,7 @@ fn run_with_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Update {
             ref action,
             ref manifest_url,
-            ref public_key,
-        }) => return handle_update(action, manifest_url.as_deref(), public_key.as_deref()),
+        }) => return handle_update(action, manifest_url.as_deref()),
         None => {}
     }
 

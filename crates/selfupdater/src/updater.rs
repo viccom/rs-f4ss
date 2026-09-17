@@ -21,14 +21,6 @@ pub struct UpdaterOptions {
     pub retries: Option<u32>,
     /// Download timeout (default: 5min).
     pub timeout: Option<Duration>,
-    /// Optional Minisign public key for asymmetric signature verification.
-    ///
-    /// Accepts either bare base64 (the second line of `minisign.pub`) or the
-    /// full file content. When set, every asset MUST carry a `signature`
-    /// field that validates against this key — otherwise the update is
-    /// rejected. When unset, only SHA256 integrity is enforced (trust the
-    /// manifest channel).
-    pub public_key: Option<String>,
 }
 
 /// Checks for updates and applies them.
@@ -38,7 +30,6 @@ pub struct Updater {
     logger: LoggerFn,
     retries: u32,
     timeout: Duration,
-    public_key: Option<String>,
     progress: ProgressState,
     /// Cached exe path before replacement, for restart().
     exe_path: RwLock<Option<PathBuf>>,
@@ -52,10 +43,6 @@ impl Updater {
         current_version: impl Into<String>,
         opts: UpdaterOptions,
     ) -> Self {
-        // Public-key validation is deferred to check()/update() so a bad
-        // key surfaces as a normal Error at the call site instead of
-        // aborting the process via panic. The raw string is kept for use
-        // in DownloadConfig.
         Self {
             source: Box::new(source),
             current: current_version.into(),
@@ -64,28 +51,16 @@ impl Updater {
                 .unwrap_or_else(|| Box::new(|msg| tracing::info!("{}", msg))),
             retries: opts.retries.unwrap_or(3),
             timeout: opts.timeout.unwrap_or(Duration::from_secs(300)),
-            public_key: opts.public_key.filter(|s| !s.trim().is_empty()),
             progress: ProgressState::new(),
             exe_path: RwLock::new(None),
             update_lock: std::sync::Mutex::new(()),
         }
     }
 
-    /// Eagerly parses the configured public key so a malformed key is
-    /// surfaced as `Error::InvalidPublicKey` before we hit the network.
-    /// The parsed value is discarded — `download_and_replace` re-parses.
-    fn validate_pubkey(&self) -> Result<(), Error> {
-        if let Some(s) = &self.public_key {
-            let _ = crate::signature::parse_public_key(s)?;
-        }
-        Ok(())
-    }
-
     /// Query the source for a newer release.
     /// Returns `None` if the current version is already the latest.
     pub fn check(&self) -> Result<Option<Release>, Error> {
         validate_version(&self.current)?;
-        self.validate_pubkey()?;
         let release = self.source.get_latest()?;
         // Reject malformed manifest versions up front: parse_version's
         // silent fallback to 0.0.0 would otherwise let an attacker with
@@ -117,8 +92,6 @@ impl Updater {
     }
 
     /// Download, install, and restart the program in one call.
-    /// On non-Windows platforms, the .old backup is cleaned up immediately.
-    /// On Windows, it remains until the next startup (file is locked).
     pub fn update_and_restart(&self, release: &Release) -> Result<(), Error> {
         let _guard = match self.update_lock.try_lock() {
             Ok(g) => g,
@@ -172,7 +145,6 @@ impl Updater {
                 let ps = self.progress.clone();
                 move |downloaded, total| ps.set_progress(downloaded, total)
             })),
-            public_key: self.public_key.clone(),
         };
 
         let result = match download_and_replace(asset, &config) {
@@ -211,7 +183,6 @@ mod tests {
                 url: "https://example.com/binary".into(),
                 sha256: "0".repeat(64),
                 size: 100,
-                signature: None,
             },
         );
         Arc::new(Release {
@@ -219,36 +190,6 @@ mod tests {
             date: "2026-01-01".into(),
             assets,
         })
-    }
-
-    /// Regression: a malformed public key must NOT panic the process via
-    /// Updater::new. The error should surface from check() instead.
-    #[test]
-    fn new_with_bad_pubkey_does_not_panic() {
-        let src = FixedSource(make_release("1.0.0"));
-        let opts = UpdaterOptions {
-            public_key: Some("not-a-valid-key".into()),
-            ..Default::default()
-        };
-        let updater = Updater::new(src, "1.0.0", opts);
-        // Construction succeeds without panic. The error surfaces on use.
-        let err = updater.check().unwrap_err();
-        assert!(matches!(err, Error::InvalidPublicKey(_)), "got: {}", err);
-    }
-
-    /// Empty / whitespace pubkey is treated as "no signature verification"
-    /// (consistent with the previous filter() behavior).
-    #[test]
-    fn empty_pubkey_treated_as_none() {
-        let src = FixedSource(make_release("1.0.0"));
-        let opts = UpdaterOptions {
-            public_key: Some("   ".into()),
-            ..Default::default()
-        };
-        let updater = Updater::new(src, "1.0.0", opts);
-        // No pubkey was set, so no InvalidPublicKey error.
-        let result = updater.check();
-        assert!(result.is_ok(), "got: {:?}", result);
     }
 
     /// Regression: a manifest version that would otherwise be silently

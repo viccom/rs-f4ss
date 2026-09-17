@@ -82,9 +82,9 @@ peer-to-peer file sharing between rs-f4ss instances.
 - WinFsp bundled as runtime dependency
 
 ### 🔄 Self-update — Replace the running binary in place
-- `rs-f4ss update check` / `apply` — hits the GitHub release manifest, validates SHA256, swaps the executable atomically
+- `rs-f4ss update check` / `apply` — hits the GitHub release manifest (HTTPS), validates SHA256, swaps the executable atomically with a restorable backup
 - Same flow over REST: `GET /api/update/version|check|progress`, `POST /api/update/apply|restart`
-- Optional Ed25519 (Minisign) signature verification when `RS_F4SS_UPDATE_PUBKEY` is set
+- Updates are SHA-256-only over HTTPS; there is no signature chain by design
 - Built on the standalone [rs-selfupdater](https://github.com/viccom/rs-selfupdater) library
 
 ---
@@ -281,8 +281,8 @@ rs-f4ss update apply --no-restart
 ```
 
 Override the manifest URL (e.g. for staging / private mirror) with
-`RS_F4SS_UPDATE_URL`. Set `RS_F4SS_UPDATE_PUBKEY` to a Minisign public
-key to require Ed25519 signature verification on every asset.
+`RS_F4SS_UPDATE_URL`. Downloads are verified against the SHA-256 in the
+manifest; the manifest is fetched over HTTPS.
 
 The same flow over HTTP — useful when the binary runs as a server on a
 remote box:
@@ -421,7 +421,6 @@ See [docs/TDD.md](docs/TDD.md) for our test methodology, and
 | `RUST_LOG` | tracing-subscriber filter, e.g. `rs_f4ss=debug,fuser=info` |
 | `XDG_STATE_DIR` | Where the daemon stores PID + log files |
 | `RS_F4SS_UPDATE_URL` | Self-update manifest URL (default: latest GitHub release) |
-| `RS_F4SS_UPDATE_PUBKEY` | Minisign public key — enables Ed25519 signature checks |
 
 ### Mount config persistence
 

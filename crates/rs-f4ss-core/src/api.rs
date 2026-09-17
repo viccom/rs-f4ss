@@ -1194,7 +1194,6 @@ mod tests {
                 url: "http://127.0.0.1:1/binary".into(),
                 sha256: "0".repeat(64),
                 size: 100,
-                signature: None,
             },
         );
         let manifest = selfupdater::Release {
@@ -1222,7 +1221,6 @@ mod tests {
 
         let cfg = SelfUpdateConfig {
             manifest_url: format!("http://{addr}/latest.json"),
-            public_key: None,
             timeout: Some(std::time::Duration::from_secs(5)),
             retries: Some(0),
         };
@@ -1270,7 +1268,6 @@ mod tests {
 
         let cfg = SelfUpdateConfig {
             manifest_url: "http://127.0.0.1:1/latest.json".into(),
-            public_key: None,
             timeout: Some(std::time::Duration::from_secs(1)),
             retries: Some(0),
         };
@@ -1316,7 +1313,6 @@ mod tests {
 
         let cfg = SelfUpdateConfig {
             manifest_url: "http://127.0.0.1:1/latest.json".into(),
-            public_key: None,
             timeout: Some(std::time::Duration::from_secs(1)),
             retries: Some(0),
         };
@@ -1359,7 +1355,6 @@ mod tests {
 
         let cfg = SelfUpdateConfig {
             manifest_url: "http://127.0.0.1:1/latest.json".into(),
-            public_key: None,
             timeout: Some(std::time::Duration::from_secs(1)),
             retries: Some(0),
         };
@@ -1419,7 +1414,6 @@ mod tests {
                 url: "http://127.0.0.1:1/binary".into(),
                 sha256: "0".repeat(64),
                 size: 100,
-                signature: None,
             },
         );
         // Same version as the running binary — `check()` returns None.
@@ -1448,7 +1442,6 @@ mod tests {
 
         let cfg = SelfUpdateConfig {
             manifest_url: format!("http://{addr}/latest.json"),
-            public_key: None,
             timeout: Some(std::time::Duration::from_secs(5)),
             retries: Some(0),
         };

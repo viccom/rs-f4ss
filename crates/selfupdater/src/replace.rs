@@ -4,7 +4,6 @@ use std::time::Duration;
 use sha2::{Digest, Sha256};
 
 use crate::error::Error;
-use crate::signature::{parse_public_key, parse_signature, verify_file};
 use crate::source::{upgrade_to_https, Asset};
 
 /// Result of a successful binary replacement.
@@ -25,10 +24,6 @@ pub struct DownloadConfig {
     pub timeout: Duration,
     /// Optional progress callback: (downloaded, total).
     pub progress: Option<Box<dyn Fn(u64, u64) + Send>>,
-    /// Optional Minisign public key. When set, the asset MUST carry a
-    /// signature and it MUST validate, or the update is rejected.
-    /// Accepts either bare base64 or full `minisign.pub` format.
-    pub public_key: Option<String>,
 }
 
 impl Default for DownloadConfig {
@@ -38,7 +33,6 @@ impl Default for DownloadConfig {
             retry_delay: Duration::from_secs(2),
             timeout: Duration::from_secs(300),
             progress: None,
-            public_key: None,
         }
     }
 }
@@ -62,10 +56,9 @@ impl Drop for TempFileGuard {
 /// 1. Resolve current executable path
 /// 2. Download asset to a temp file (same directory as exe, to avoid cross-fs rename)
 /// 3. Validate SHA256 checksum
-/// 4. If a public key is configured, verify the Minisign signature
-/// 5. Set executable permission on Unix (AFTER all verification)
-/// 6. Atomically replace using `self-replace`
-/// 7. Drop guard removes the (now-moved) temp file
+/// 4. Set executable permission on Unix (AFTER validation)
+/// 5. Atomically replace using `self-replace`
+/// 6. Drop guard removes the (now-moved) temp file
 pub fn download_and_replace(
     asset: &Asset,
     config: &DownloadConfig,
@@ -75,9 +68,8 @@ pub fn download_and_replace(
     let _guard = TempFileGuard(tmp_path.clone());
 
     validate_sha256(&tmp_path, &asset.sha256)?;
-    verify_signature_if_configured(&tmp_path, asset, config)?;
 
-    // Set executable permission only AFTER all verification, so an
+    // Set executable permission only AFTER validation, so an
     // unverified binary is never executable on disk.
     #[cfg(unix)]
     {
@@ -85,36 +77,73 @@ pub fn download_and_replace(
         std::fs::set_permissions(&tmp_path, std::fs::Permissions::from_mode(0o755))?;
     }
 
-    self_replace::self_replace(&tmp_path).map_err(Error::Io)?;
+    replace_with_backup(&tmp_path)?;
     Ok(ReplaceResult {
         exe_path: exe_path.clone(),
         tmp_path: tmp_path.clone(),
     })
 }
 
-/// Verify the asset's Minisign signature when a public key is configured.
+/// Backup sidecar written next to the executable before a replace.
 ///
-/// Fail-closed: if a public key is set, the asset MUST carry a signature and
-/// it MUST validate. If no public key is set, this is a no-op (callers fall
-/// back to SHA256-only integrity, which trusts the manifest channel).
-fn verify_signature_if_configured(
-    path: &Path,
-    asset: &Asset,
-    config: &DownloadConfig,
-) -> Result<(), Error> {
-    let pubkey_str = match config.public_key.as_deref() {
-        Some(s) if !s.trim().is_empty() => s,
-        _ => return Ok(()),
-    };
-    let sig_str = asset
-        .signature
-        .as_deref()
-        .filter(|s| !s.trim().is_empty())
-        .ok_or(Error::MissingSignature)?;
+/// `self_replace` on Windows moves the current exe away, schedules it for
+/// deletion, and only then copies the new binary into place; a failure in
+/// between (disk full, AV lock, power loss) leaves the install path WITHOUT
+/// an executable and — because the moved copy is scheduled for deletion on
+/// process exit — without the old one either. Keeping our own sidecar gives
+/// the failure path something to restore from.
+const BACKUP_SUFFIX: &str = ".update-backup";
 
-    let public_key = parse_public_key(pubkey_str)?;
-    let signature = parse_signature(sig_str)?;
-    verify_file(path, &signature, &public_key)
+/// Replace the current binary via `self_replace`, keeping a restorable backup.
+///
+/// 1. Copy the current exe to `<exe><BACKUP_SUFFIX>` (same directory, so the
+///    later rename stays on one volume).
+/// 2. Run `self_replace`.
+/// 3. On success, delete the backup; on failure, attempt to restore the
+///    backup over the (possibly damaged) install path and return the error.
+fn replace_with_backup(new_binary: &Path) -> Result<(), Error> {
+    let exe = current_exe_resolved()?;
+    let exe_dir = exe
+        .parent()
+        .ok_or_else(|| Error::NoParentDir(exe.clone()))?
+        .to_path_buf();
+    let file_name = exe
+        .file_name()
+        .ok_or_else(|| Error::NoParentDir(exe.clone()))?
+        .to_os_string();
+    let backup_path = exe_dir.join({
+        let mut name = file_name;
+        name.push(BACKUP_SUFFIX);
+        name
+    });
+
+    std::fs::copy(&exe, &backup_path)?;
+
+    match self_replace::self_replace(new_binary) {
+        Ok(()) => {
+            if let Err(e) = std::fs::remove_file(&backup_path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!("backup cleanup {}: {e}", backup_path.display());
+                }
+            }
+            Ok(())
+        }
+        Err(e) => {
+            tracing::error!(
+                "self_replace failed: {e}; attempting restore from {}",
+                backup_path.display()
+            );
+            match std::fs::copy(&backup_path, &exe) {
+                Ok(_) => tracing::info!("restored original binary from backup"),
+                Err(re) => tracing::error!(
+                    "restore from backup failed: {re}; manual recovery: copy {} to {}",
+                    backup_path.display(),
+                    exe.display()
+                ),
+            }
+            Err(Error::Io(e))
+        }
+    }
 }
 
 fn download_with_retry(asset: &Asset, config: &DownloadConfig) -> Result<PathBuf, Error> {

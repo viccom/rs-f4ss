@@ -43,4 +43,4 @@ sha2 = "0.10"
 dirs = "6"
 futures-util = "0.3"
 tokio-util = { version = "0.7", features = ["io"] }
-selfupdater = { path = "crates/selfupdater", default-features = false, features = ["server", "tls-rustls"] }
+selfupdater = { path = "crates/selfupdater", default-features = false, features = ["tls-rustls"] }

@@ -3,13 +3,13 @@ name = "selfupdater"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
-description = "Cross-platform binary self-updater for Rust with HTTPS, SHA256 and Ed25519/minisign signature verification"
+description = "Cross-platform binary self-updater for Rust with HTTPS and SHA256 integrity verification"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/viccom/rs-selfupdater"
 homepage = "https://github.com/viccom/rs-selfupdater"
 documentation = "https://docs.rs/selfupdater"
-keywords = ["self-update", "updater", "binary", "minisign", "cli"]
+keywords = ["self-update", "updater", "binary", "cli"]
 categories = ["development-tools", "command-line-utilities"]
 
 [dependencies]
@@ -22,9 +22,6 @@ serde_json = "1"
 tempfile = "3"
 tracing = "0.1"
 thiserror = "2"
-minisign-verify = "0.2"
-axum = { version = "0.7", optional = true }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
 
 [features]
 # `default` keeps native-tls to preserve the previous behavior for
@@ -32,7 +29,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = tr
 # rustls-tls (e.g. workspaces that already standardize on rustls) should
 # opt in with `default-features = false, features = ["tls-rustls", ...]`.
 default = ["tls-native"]
-server = ["axum", "tokio"]
 tls-native = ["reqwest/default-tls"]
 tls-rustls = ["reqwest/rustls-tls"]
 
