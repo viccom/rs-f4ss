@@ -394,6 +394,7 @@ impl MountManager {
         }; // DashMap lock released
 
         // Phase 2: Unmount (outside lock)
+        #[cfg(target_os = "linux")]
         let mountpoint = self
             .entries
             .get(id)

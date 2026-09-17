@@ -317,7 +317,7 @@ pub async fn handle_put(state: &Arc<FileServerState>, local_path: &Path, body: B
 
     match write_body_to_file(body, local_path).await {
         Ok(status) => status.into_response(),
-        Err(response) => response,
+        Err(response) => *response,
     }
 }
 

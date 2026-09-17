@@ -37,8 +37,8 @@ pub struct ServeLock {
 
 pub fn try_acquire_serve_lock() -> Result<ServeLock, String> {
     let dir = dirs::state_dir()
-        .or_else(|| dirs::cache_dir())
-        .unwrap_or_else(|| PathBuf::from(std::env::temp_dir()));
+        .or_else(dirs::cache_dir)
+        .unwrap_or_else(std::env::temp_dir);
     let dir = dir.join("rs-f4ss");
     let _ = std::fs::create_dir_all(&dir);
     let pid_path = dir.join("serve.pid");

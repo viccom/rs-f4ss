@@ -481,42 +481,48 @@ pub(crate) fn file_to_body(file: tokio::fs::File) -> axum::body::Body {
 pub(crate) async fn write_body_to_file(
     body: axum::body::Body,
     path: &Path,
-) -> Result<StatusCode, Response> {
+) -> Result<StatusCode, Box<Response>> {
     if let Some(parent) = path.parent() {
         if let Err(e) = tokio::fs::create_dir_all(parent).await {
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("mkdir: {e}")).into_response());
+            return Err(Box::new(
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("mkdir: {e}")).into_response(),
+            ));
         }
     }
 
-    let mut file = tokio::fs::File::create(path)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("create: {e}")).into_response())?;
+    let mut file = tokio::fs::File::create(path).await.map_err(|e| {
+        Box::new(
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("create: {e}")).into_response(),
+        )
+    })?;
 
     let mut stream = body.into_data_stream();
     let mut total: u64 = 0;
 
     use futures_util::TryStreamExt;
 
-    while let Some(chunk) = stream
-        .try_next()
-        .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("read body: {e}")).into_response())?
-    {
+    while let Some(chunk) = stream.try_next().await.map_err(|e| {
+        Box::new((StatusCode::BAD_REQUEST, format!("read body: {e}")).into_response())
+    })? {
         total += chunk.len() as u64;
         if total > MAX_UPLOAD_SIZE {
             if let Err(e) = tokio::fs::remove_file(path).await {
                 tracing::warn!("413 cleanup remove {}: {e}", path.display());
             }
-            return Err(StatusCode::PAYLOAD_TOO_LARGE.into_response());
+            return Err(Box::new(StatusCode::PAYLOAD_TOO_LARGE.into_response()));
         }
         file.write_all(&chunk).await.map_err(|e| {
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("write: {e}")).into_response()
+            Box::new(
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("write: {e}")).into_response(),
+            )
         })?;
     }
 
-    file.flush()
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("flush: {e}")).into_response())?;
+    file.flush().await.map_err(|e| {
+        Box::new(
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("flush: {e}")).into_response(),
+        )
+    })?;
 
     let status = if total == 0 {
         StatusCode::NO_CONTENT

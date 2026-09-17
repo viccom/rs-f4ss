@@ -13,7 +13,7 @@ pub mod mount_windows;
 
 #[cfg(feature = "api")]
 pub mod api;
-#[cfg(feature = "api")]
+#[cfg(any(feature = "api", feature = "serve"))]
 pub mod manager;
 #[cfg(any(feature = "api", feature = "serve"))]
 pub mod persistence;

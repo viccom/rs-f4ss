@@ -359,10 +359,7 @@ mod tests {
         std::fs::write(&new_binary, b"NEW").unwrap();
 
         let err = replace_with_backup_at(&exe, &new_binary, |_| {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "injected failure",
-            ))
+            Err(std::io::Error::other("injected failure"))
         })
         .unwrap_err();
 

@@ -19,7 +19,7 @@ s3     = ["dep:reqwest", "dep:quick-xml", "dep:chrono"]
 api = ["dep:axum", "dep:tower-http", "dep:serde_json", "dep:dirs", "dep:sha2", "dep:rand"]
 
 # File sharing server (HTTP + WebDAV)
-serve = ["dep:axum", "dep:tower-http", "dep:chrono", "dep:base64", "dep:serde_json", "dep:tokio-util", "dep:sha2", "dep:rand"]
+serve = ["dep:axum", "dep:tower-http", "dep:chrono", "dep:base64", "dep:serde_json", "dep:tokio-util", "dep:sha2", "dep:rand", "dep:dirs"]
 
 # Self-updater (built on top of the rs-selfupdater library)
 selfupdate = ["dep:selfupdater", "dep:serde_json"]
