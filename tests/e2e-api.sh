@@ -36,8 +36,11 @@ FAILURES=()
 SKIPPED=()
 TOTAL=0
 PASSED=0
+CURRENT_TEST_PASSED=0
 
-pass()   { echo -e "${GREEN}  ✅ PASS${NC}: $1"; PASSED=$((PASSED + 1)); }
+# One run_test may check several assertions; only the first pass() counts
+# toward the summary so PASSED never exceeds TOTAL (R12).
+pass()   { echo -e "${GREEN}  ✅ PASS${NC}: $1"; if [ "${CURRENT_TEST_PASSED:-0}" -eq 0 ]; then PASSED=$((PASSED + 1)); CURRENT_TEST_PASSED=1; fi; }
 fail()   { echo -e "${RED}  ❌ FAIL${NC}: $1"; FAILURES+=("$1"); }
 info()   { echo -e "${CYAN}  ℹ️${NC} $1"; }
 skip()   { echo -e "${YELLOW}  ⏭ SKIP${NC}: $1"; SKIPPED+=("$1"); }
@@ -45,6 +48,7 @@ skip()   { echo -e "${YELLOW}  ⏭ SKIP${NC}: $1"; SKIPPED+=("$1"); }
 run_test() {
     local name="$1"
     TOTAL=$((TOTAL + 1))
+    CURRENT_TEST_PASSED=0
     echo -e "\n${CYAN}Test $TOTAL${NC}: $name"
 }
 
