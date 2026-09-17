@@ -1,0 +1,6 @@
+# Windows contributors: the GNU toolchain cannot build winfsp-sys
+# (its build.rs panics on x86_64-pc-windows-gnu). Pin the MSVC host so
+# a plain `cargo build` works out of the box (R8).
+[toolchain]
+channel = "stable"
+targets = ["x86_64-pc-windows-msvc"]

@@ -5,6 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Test Commands
 
 ```bash
+# Windows hosts: rust-toolchain.toml pins the MSVC target — the GNU
+# toolchain cannot build winfsp-sys (its build.rs rejects that triple).
 cargo build --release              # Build release binary
 mkdir -p release && cp target/release/rs-f4ss release/  # Copy release artifact to release/
 cargo test --all-features          # All unit tests (205 tests)

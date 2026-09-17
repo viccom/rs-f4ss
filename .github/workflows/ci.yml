@@ -5,6 +5,11 @@ on:
     branches: [master]
   pull_request:
     branches: [master]
+  schedule:
+    # Daily at 03:30 UTC — catches dependency drift (e.g. a git-pinned
+    # crate publishing breaking changes) within a day even when master
+    # is quiet (R1/R8).
+    - cron: "30 3 * * *"
 
 env:
   CARGO_TERM_COLOR: always
@@ -46,7 +51,7 @@ jobs:
             libssl-dev \
             build-essential \
             file
-      - run: cargo clippy --all-targets --all-features -- -W clippy::all
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   # ─────────────────────────────────────────────────────────────────────
   # Unit / integration tests across the feature matrix
@@ -145,6 +150,64 @@ jobs:
         run: cargo test --all-features
         env:
           RUST_LOG: rs_f4ss=warn
+
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Windows E2E — dufs (WebDAV) → rs-f4ss (WinFsp) → PowerShell (R8)
+  # ─────────────────────────────────────────────────────────────────────
+  windows-e2e:
+    name: e2e (windows · winfsp)
+    runs-on: windows-latest
+    needs: [fmt, clippy]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install WinFsp
+        # Same MSI approach as the test-windows job (choco package is broken)
+        run: |
+          $url = "https://github.com/winfsp/winfsp/releases/download/v2.0/winfsp-2.0.23075.msi"
+          $msi = "$env:TEMP\winfsp.msi"
+          Invoke-WebRequest -Uri $url -OutFile $msi -UseBasicParsing
+          $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i", $msi, "/qn", "/norestart" -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { exit $proc.ExitCode }
+      - name: Add WinFsp to PATH
+        run: Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\WinFsp\bin"
+      - name: Install dufs (test WebDAV server)
+        run: |
+          for ($i = 1; $i -le 5; $i++) {
+            try {
+              Invoke-WebRequest -Uri "https://github.com/sigoden/dufs/releases/download/v0.43.0/dufs-v0.43.0-x86_64-pc-windows-msvc.zip" -OutFile "$env:TEMP\dufs.zip" -UseBasicParsing
+              Expand-Archive -Path "$env:TEMP\dufs.zip" -DestinationPath "$env:TEMP\dufs" -Force
+              Copy-Item "$env:TEMP\dufs\dufs.exe" -Destination "C:\Windows\dufs.exe" -ErrorAction SilentlyContinue
+              if (-not (Test-Path "C:\Windows\dufs.exe")) {
+                $dufs = Get-ChildItem "$env:TEMP\dufs" -Filter "dufs.exe" -Recurse | Select-Object -First 1
+                Copy-Item $dufs.FullName -Destination "C:\Windows\dufs.exe"
+              }
+              break
+            } catch {
+              Write-Host "dufs download attempt $i failed, retrying in 5s…"
+              Start-Sleep -Seconds 5
+            }
+          }
+          dufs --version
+      - name: Build release binary
+        run: cargo build --release --all-features
+        env:
+          RUST_LOG: rs_f4ss=warn
+      - name: Run E2E (WinFsp mount)
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File tests/e2e.ps1 -DufsMountExe "./target/release/rs-f4ss.exe"
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-windows-logs
+          path: |
+            $env:TEMP\rs-f4ss-*.log
+            $env:TEMP\dufs-*.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   # ─────────────────────────────────────────────────────────────────────
   # Release build — every feature combination that ships
