@@ -394,6 +394,7 @@ impl MountManager {
         }; // DashMap lock released
 
         // Phase 2: Unmount (outside lock)
+        #[cfg(target_os = "linux")]
         let mountpoint = self
             .entries
             .get(id)
@@ -443,6 +444,25 @@ impl MountManager {
             *h.state.lock().unwrap() = MountState::Stopped;
         }
         Ok(())
+    }
+
+    /// Stop every active mount. Used on application exit so a tray quit or
+    /// process shutdown does not leave mounts dangling.
+    pub fn stop_all(&self) {
+        let ids: Vec<String> = self.entries.iter().map(|r| r.key().clone()).collect();
+        for id in ids {
+            let state = self
+                .handles
+                .get(&id)
+                .map(|h| h.state())
+                .unwrap_or(MountState::Stopped);
+            if matches!(state, MountState::Stopped | MountState::Error(_)) {
+                continue;
+            }
+            if let Err(e) = self.stop(&id) {
+                tracing::warn!("stop_all: mount {id}: {e}");
+            }
+        }
     }
 }
 

@@ -10,11 +10,6 @@ pub struct Asset {
     pub url: String,
     pub sha256: String,
     pub size: u64,
-    /// Optional Minisign signature (full `.minisig` content, 4 lines).
-    /// When the Updater is configured with a public key, this field MUST be
-    /// present or the update is rejected.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub signature: Option<String>,
 }
 
 /// An available update release.

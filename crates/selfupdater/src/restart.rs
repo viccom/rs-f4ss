@@ -55,10 +55,9 @@ fn windows_restart(exe_path: &Path) -> Result<(), Error> {
         match child.try_wait() {
             Ok(Some(status)) => {
                 if !status.success() {
-                    return Err(Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("new process exited during health check: {}", status),
-                    )));
+                    return Err(Error::Io(std::io::Error::other(format!(
+                        "new process exited during health check: {status}"
+                    ))));
                 }
                 // Successful exit during health check — old process also exits.
                 std::process::exit(0);

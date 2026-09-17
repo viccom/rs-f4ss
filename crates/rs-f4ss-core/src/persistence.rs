@@ -31,7 +31,7 @@ impl Default for AuthConfig {
     fn default() -> Self {
         Self {
             username: "admin".to_string(),
-            password_hash: sha256_hex("admin"),
+            password_hash: hash_password("admin"),
         }
     }
 }
@@ -41,6 +41,94 @@ pub fn sha256_hex(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+/// Salted password hash, self-describing format: `s256$<salt_hex>$<hash_hex>`.
+///
+/// The salt is per-call random, so the same password hashes differently every
+/// time — verification goes through [`verify_password`], never equality.
+#[cfg(any(feature = "api", feature = "serve"))]
+pub fn hash_password(password: &str) -> String {
+    const ITERATIONS: u32 = 10_000;
+
+    let mut salt = [0u8; 16];
+    rand::fill(&mut salt);
+
+    let mut hash = salt.to_vec();
+    hash.extend_from_slice(password.as_bytes());
+    for _ in 0..ITERATIONS {
+        let mut hasher = Sha256::new();
+        hasher.update(&hash);
+        hash = hasher.finalize().to_vec();
+    }
+
+    format!(
+        "s256${}${}",
+        hex_encode(&salt),
+        hex_encode(&hash)
+    )
+}
+
+/// Constant-time verification of a password against a stored hash.
+///
+/// Accepts both the salted `s256$…` format and legacy bare SHA-256 hex (so a
+/// config written by an older build still verifies; `hash_password` output
+/// written back on the next successful password change migrates it).
+#[cfg(any(feature = "api", feature = "serve"))]
+pub fn verify_password(password: &str, stored: &str) -> bool {
+    if let Some(rest) = stored.strip_prefix("s256$") {
+        let Some((salt_hex, hash_hex)) = rest.split_once('$') else {
+            return false;
+        };
+        let Ok(salt) = hex_decode(salt_hex) else {
+            return false;
+        };
+        let mut hash = salt.clone();
+        hash.extend_from_slice(password.as_bytes());
+        for _ in 0..10_000 {
+            let mut hasher = Sha256::new();
+            hasher.update(&hash);
+            hash = hasher.finalize().to_vec();
+        }
+        return constant_time_eq(&hash, &hex_decode(hash_hex).unwrap_or_default());
+    }
+    // Legacy unsalted SHA-256.
+    constant_time_eq(sha256_hex(password).as_bytes(), stored.as_bytes())
+}
+
+#[cfg(any(feature = "api", feature = "serve"))]
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(any(feature = "api", feature = "serve"))]
+fn hex_decode(s: &str) -> Result<Vec<u8>, ()> {
+    if s.len() % 2 != 0 {
+        return Err(());
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| ()))
+        .collect()
+}
+
+/// Constant-time byte comparison; always walks the full input.
+#[cfg(any(feature = "api", feature = "serve"))]
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    let len = a.len().max(b.len());
+    let mut result = a.len() ^ b.len();
+    for i in 0..len {
+        let x = a.get(i).copied().unwrap_or(0);
+        let y = b.get(i).copied().unwrap_or(0);
+        result |= (x ^ y) as usize;
+    }
+    result == 0
+}
+
+/// Whether `hash` still carries the default "admin" credential.
+#[cfg(any(feature = "api", feature = "serve"))]
+pub fn is_default_auth(auth: &AuthConfig) -> bool {
+    auth.username == "admin" && verify_password("admin", &auth.password_hash)
 }
 
 // ---------------------------------------------------------------------------
@@ -445,5 +533,52 @@ mod tests {
         save(&mounts, &path);
         assert_eq!(load(&path).len(), 2);
         assert_eq!(load_shares(&path).len(), 1);
+    }
+
+    #[test]
+    #[cfg(any(feature = "api", feature = "serve"))]
+    fn test_hash_password_is_salted_and_verifiable() {
+        let h1 = hash_password("hunter2");
+        let h2 = hash_password("hunter2");
+        // Same password, two different salts.
+        assert_ne!(h1, h2);
+        assert!(h1.starts_with("s256$"), "format: {h1}");
+        assert!(verify_password("hunter2", &h1));
+        assert!(!verify_password("hunter3", &h1));
+        assert!(!verify_password("", &h1));
+    }
+
+    #[test]
+    #[cfg(any(feature = "api", feature = "serve"))]
+    fn test_verify_password_accepts_legacy_unsalted_hash() {
+        let legacy = sha256_hex("admin");
+        assert!(verify_password("admin", &legacy));
+        assert!(!verify_password("root", &legacy));
+        // Garbage input must not panic.
+        assert!(!verify_password("admin", "s256$"));
+        assert!(!verify_password("admin", "s256$zz$zz"));
+    }
+
+    #[test]
+    #[cfg(any(feature = "api", feature = "serve"))]
+    fn test_default_auth_uses_salted_hash_and_is_detected() {
+        let auth = AuthConfig::default();
+        assert_ne!(auth.password_hash, sha256_hex("admin"));
+        assert!(is_default_auth(&auth));
+        let changed = AuthConfig {
+            username: "admin".to_string(),
+            password_hash: hash_password("new-pass"),
+        };
+        assert!(!is_default_auth(&changed));
+    }
+
+    #[test]
+    #[cfg(any(feature = "api", feature = "serve"))]
+    fn test_constant_time_eq() {
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+        assert!(!constant_time_eq(b"", b"a"));
+        assert!(constant_time_eq(b"", b""));
     }
 }

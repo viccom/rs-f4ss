@@ -1,3 +1,5 @@
+use rs_f4ss_core::MountManager;
+use std::sync::Arc;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -9,13 +11,22 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let quit = MenuItemBuilder::with_id("quit", "退出").build(app)?;
     let menu = MenuBuilder::new(app).items(&[&show, &quit]).build()?;
 
-    TrayIconBuilder::new()
-        .icon(app.default_window_icon().cloned().unwrap())
+    let mut builder = TrayIconBuilder::new();
+    // A missing bundled icon must not panic the app at startup (R10).
+    if let Some(icon) = app.default_window_icon().cloned() {
+        builder = builder.icon(icon);
+    }
+    builder
         .menu(&menu)
         .tooltip("rs-f4ss")
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => show_main_window(app),
             "quit" => {
+                // Unmount active mounts before exiting — the process dies
+                // here, so nothing else would clean them up (R10).
+                if let Some(mgr) = app.try_state::<Arc<MountManager>>() {
+                    mgr.stop_all();
+                }
                 app.exit(0);
             }
             _ => {}

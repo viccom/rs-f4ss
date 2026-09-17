@@ -104,9 +104,6 @@ enum Commands {
         /// Override the manifest URL (default: GitHub releases/latest/download/latest.json)
         #[arg(long, env = "RS_F4SS_UPDATE_URL")]
         manifest_url: Option<String>,
-        /// Optional minisign public key for signature verification
-        #[arg(long, env = "RS_F4SS_UPDATE_PUBKEY")]
-        public_key: Option<String>,
     },
 }
 
@@ -202,7 +199,11 @@ enum ShareAction {
     Serve {
         #[arg(help = "Local directory to share")]
         path: String,
-        #[arg(long, default_value = "0.0.0.0:8080", help = "Listen address")]
+        #[arg(
+            long,
+            default_value = "127.0.0.1:8080",
+            help = "Listen address (use 0.0.0.0:8080 to expose on the network)"
+        )]
         listen: String,
         #[arg(short, long, help = "HTTP Basic Auth username")]
         user: Option<String>,
@@ -372,16 +373,12 @@ fn build_default_updater() -> Option<rs_f4ss_core::selfupdate::SelfUpdater> {
 fn handle_update(
     action: &UpdateAction,
     manifest_url: Option<&str>,
-    public_key: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use rs_f4ss_core::selfupdate::{SelfUpdateConfig, SelfUpdater, UpdateInfo};
 
     let mut config = SelfUpdateConfig::from_env();
     if let Some(url) = manifest_url {
         config.manifest_url = url.to_string();
-    }
-    if let Some(key) = public_key {
-        config.public_key = Some(key.to_string());
     }
 
     let updater = SelfUpdater::new(env!("CARGO_PKG_VERSION"), config)?;
@@ -396,14 +393,7 @@ fn handle_update(
                 "  exe:        {}",
                 info.exe_path.as_deref().unwrap_or("<unknown>")
             );
-            println!(
-                "  signature:  {}",
-                if info.public_key_configured {
-                    "verified (minisign)"
-                } else {
-                    "sha256 only"
-                }
-            );
+            println!("  integrity:  sha256 (update channel: HTTPS manifest)");
             // Surface the post-apply pending state so the operator can
             // confirm `apply` succeeded without poking the REST API.
             println!(
@@ -600,8 +590,7 @@ fn run_with_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Update {
             ref action,
             ref manifest_url,
-            ref public_key,
-        }) => return handle_update(action, manifest_url.as_deref(), public_key.as_deref()),
+        }) => return handle_update(action, manifest_url.as_deref()),
         None => {}
     }
 
@@ -913,10 +902,16 @@ fn handle_serve(listen: &str, config_path: Option<&str>) -> Result<(), Box<dyn s
 
     let auth = rs_f4ss_core::persistence::load_auth(&path);
     tracing::info!("Auth user: {}", auth.username);
-    if auth.username == "admin"
-        && auth.password_hash == rs_f4ss_core::persistence::sha256_hex("admin")
-    {
+    let default_creds = rs_f4ss_core::persistence::is_default_auth(&auth);
+    if default_creds {
         tracing::warn!("Using default credentials (admin:admin). Please change the password via Web UI or CLI.");
+        if !is_loopback_addr(listen) {
+            return Err(format!(
+                "Refusing to serve on {listen} with default credentials (admin:admin). \
+                 Change the password first (Web UI or `rs-f4ss serve` on 127.0.0.1), \
+                 or bind to a loopback address, e.g. --listen 127.0.0.1:8080."
+            ).into());
+        }
     }
 
     let state = std::sync::Arc::new(rs_f4ss_core::api::AppState {
@@ -1010,6 +1005,63 @@ fn main() {
 // Share mode (HTTP + WebDAV file server)
 // ---------------------------------------------------------------------------
 
+/// Whether `addr` binds to this machine only.
+#[cfg(any(feature = "api", feature = "serve"))]
+fn is_loopback_addr(addr: &str) -> bool {
+    use std::net::{IpAddr, Ipv6Addr};
+
+    let host = if let Some(rest) = addr.strip_prefix('[') {
+        // Bracketed IPv6, e.g. "[::1]:8080" or "[::]".
+        match rest.split_once(']') {
+            Some((h, _)) => h,
+            None => return false,
+        }
+    } else if let Ok(v6) = addr.parse::<Ipv6Addr>() {
+        // Bare IPv6 without brackets, e.g. "::1".
+        return v6.is_loopback();
+    } else {
+        // "host:port"; the host is empty for ":8080", which binds every interface.
+        match addr.rsplit_once(':') {
+            Some((h, _)) => h,
+            None => addr,
+        }
+    };
+
+    if host.is_empty() {
+        return false;
+    }
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    host.parse::<IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
+/// Whether to warn about an unauthenticated server reachable from the network.
+#[cfg(feature = "serve")]
+fn needs_no_auth_warning(addr: &str, has_auth: bool) -> bool {
+    !has_auth && !is_loopback_addr(addr)
+}
+
+/// Resolve `--user`/`--pass` into an optional `(username, password_hash)` pair.
+#[cfg(feature = "serve")]
+fn parse_share_auth(
+    user: Option<&str>,
+    pass: Option<&str>,
+) -> Result<Option<(String, String)>, String> {
+    match (user, pass) {
+        (Some(u), Some(p)) => Ok(Some((
+            u.to_string(),
+            rs_f4ss_core::persistence::sha256_hex(p),
+        ))),
+        (Some(_), None) | (None, Some(_)) => {
+            Err("Both --user and --pass are required for authentication".to_string())
+        }
+        (None, None) => Ok(None),
+    }
+}
+
 #[cfg(feature = "serve")]
 fn handle_share(
     path: &str,
@@ -1023,13 +1075,8 @@ fn handle_share(
         return Err(format!("Not a directory: {path}").into());
     }
 
-    let auth = match (user, pass) {
-        (Some(u), Some(p)) => Some((u.to_string(), rs_f4ss_core::persistence::sha256_hex(p))),
-        (Some(_), None) => {
-            return Err("Both --user and --pass are required for authentication".into())
-        }
-        _ => None,
-    };
+    let auth = parse_share_auth(user, pass)?;
+    let has_auth = auth.is_some();
 
     let config = rs_f4ss_core::server::FileServerConfig {
         root,
@@ -1038,6 +1085,16 @@ fn handle_share(
     };
 
     tracing::info!("Sharing {} at {listen} (readonly={})", path, read_only);
+    if needs_no_auth_warning(listen, has_auth) {
+        let access = if read_only {
+            "readable by anyone"
+        } else {
+            "readable and writable by anyone"
+        };
+        tracing::warn!(
+            "Serving {path} on {listen} with NO authentication — the directory is {access} who can reach this address. Bind to a loopback address (the default) or pass --user/--pass."
+        );
+    }
 
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(rs_f4ss_core::server::serve(config, listen))?;
@@ -1358,5 +1415,71 @@ mod tests {
             }) => {}
             _ => panic!("Expected Share List"),
         }
+    }
+
+    #[cfg(feature = "serve")]
+    #[test]
+    fn test_share_serve_default_listen_is_loopback() {
+        let cli = parse_cli(&["rs-f4ss", "share", "serve", "/data"]).unwrap();
+        match cli.command {
+            Some(Commands::Share {
+                action: ShareAction::Serve { ref listen, .. },
+                ..
+            }) => {
+                assert_eq!(listen, "127.0.0.1:8080");
+                assert!(is_loopback_addr(listen));
+            }
+            _ => panic!("Expected Share Serve"),
+        }
+    }
+
+    #[cfg(feature = "serve")]
+    #[test]
+    fn test_is_loopback_addr_truth_table() {
+        for addr in ["127.0.0.1:8080", "localhost:8080", "[::1]:8080", "::1"] {
+            assert!(is_loopback_addr(addr), "{addr} should be loopback");
+        }
+        for addr in ["0.0.0.0:8080", "192.168.1.5:9000", "[::]:8080", "10.0.0.1:80"] {
+            assert!(!is_loopback_addr(addr), "{addr} should NOT be loopback");
+        }
+    }
+
+    #[cfg(feature = "serve")]
+    #[test]
+    fn test_parse_share_auth_pass_only_is_error() {
+        let result = parse_share_auth(None, Some("p"));
+        assert!(result.is_err(), "pass without user must be an error");
+    }
+
+    #[cfg(feature = "serve")]
+    #[test]
+    fn test_parse_share_auth_user_only_is_error() {
+        let result = parse_share_auth(Some("u"), None);
+        assert!(result.is_err(), "user without pass must be an error");
+    }
+
+    #[cfg(feature = "serve")]
+    #[test]
+    fn test_parse_share_auth_both_some_enables_auth() {
+        let auth = parse_share_auth(Some("u"), Some("p")).unwrap();
+        let (user, hash) = auth.expect("auth should be enabled");
+        assert_eq!(user, "u");
+        assert_eq!(hash, rs_f4ss_core::persistence::sha256_hex("p"));
+    }
+
+    #[cfg(feature = "serve")]
+    #[test]
+    fn test_parse_share_auth_none_none_is_disabled() {
+        let auth = parse_share_auth(None, None).unwrap();
+        assert!(auth.is_none(), "no credentials means auth disabled");
+    }
+
+    #[cfg(feature = "serve")]
+    #[test]
+    fn test_needs_no_auth_warning() {
+        assert!(needs_no_auth_warning("0.0.0.0:8080", false));
+        assert!(needs_no_auth_warning("192.168.1.5:9000", false));
+        assert!(!needs_no_auth_warning("127.0.0.1:8080", false));
+        assert!(!needs_no_auth_warning("0.0.0.0:8080", true));
     }
 }

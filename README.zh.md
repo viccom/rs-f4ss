@@ -81,7 +81,7 @@
 ### 🔄 自升级 (Self-update) — 原地替换运行中的二进制
 - `rs-f4ss update check` / `apply` —— 拉取 GitHub release 清单，校验 SHA256，原子替换可执行文件
 - REST 同样支持:`GET /api/update/version|check|progress`、`POST /api/update/apply|restart`
-- 设置 `RS_F4SS_UPDATE_PUBKEY` 后强制做 Ed25519 (Minisign) 签名校验
+- 更新仅做 SHA-256 完整性校验（清单经 HTTPS 获取），无签名链设计
 - 基于独立的 [rs-selfupdater](https://github.com/viccom/rs-selfupdater) 库实现
 
 ---
@@ -116,8 +116,13 @@ fusermount -u /mnt/remote   # 用完后卸载
 ### 分享本地目录
 
 ```bash
-# 在 8080 端口通过 HTTP + WebDAV 暴露一个目录
-rs-f4ss share serve ~/Documents --listen :8080 --allow-all
+# 在 8080 端口通过 HTTP + WebDAV 暴露一个目录（默认仅绑定 127.0.0.1:8080）
+rs-f4ss share serve ~/Documents --listen 127.0.0.1:8080
+
+# 需要对局域网/外网开放时，显式绑定并加上认证：
+rs-f4ss share serve ~/Documents --listen 0.0.0.0:8080 --user me --pass secret
+# 非 loopback 地址且未提供 --user/--pass 时启动会打印醒目警告：
+# 目录对任何能访问该地址的人可读可写。
 
 # 浏览器打开 http://localhost:8080
 # 或从另一台机器挂载它:
@@ -273,8 +278,7 @@ rs-f4ss update apply --no-restart
 ```
 
 通过 `RS_F4SS_UPDATE_URL` 可以覆盖清单地址(用于私有镜像 / 灰度环境);
-设置 `RS_F4SS_UPDATE_PUBKEY` 为 Minisign 公钥后,所有资产都会强制
-做 Ed25519 签名校验。
+下载以清单中的 SHA-256 校验完整性,清单经 HTTPS 获取。
 
 同样的流程也可通过 HTTP 触发 —— 适合在远程机器以服务形式运行的场景:
 
@@ -412,7 +416,6 @@ powershell -File tests/e2e.ps1
 | `RUST_LOG` | tracing-subscriber 过滤,例如 `rs_f4ss=debug,fuser=info` |
 | `XDG_STATE_DIR` | 守护进程存储 PID 与日志文件的目录 |
 | `RS_F4SS_UPDATE_URL` | 自升级清单 URL(默认指向最新 GitHub release) |
-| `RS_F4SS_UPDATE_PUBKEY` | Minisign 公钥 —— 启用 Ed25519 签名校验 |
 
 ### 挂载配置持久化
 

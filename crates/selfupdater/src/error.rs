@@ -14,15 +14,6 @@ pub enum Error {
     #[error("missing sha256 checksum — integrity verification required")]
     MissingSha256,
 
-    #[error("missing signature — public key configured but asset has no signature")]
-    MissingSignature,
-
-    #[error("invalid signature: {0}")]
-    InvalidSignature(String),
-
-    #[error("invalid public key: {0}")]
-    InvalidPublicKey(String),
-
     #[error("download failed after {retries} retries: {reason}")]
     DownloadFailed { retries: u32, reason: String },
 

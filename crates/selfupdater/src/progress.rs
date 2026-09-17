@@ -44,11 +44,11 @@ impl ProgressState {
     /// Returns a typed copy of the current state.
     pub fn snapshot(&self) -> ProgressSnapshot {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        let percent = if inner.total > 0 {
-            (inner.downloaded * 100 / inner.total) as u32
-        } else {
-            0
-        };
+        let percent = (inner
+            .downloaded
+            .saturating_mul(100)
+            .checked_div(inner.total)
+            .unwrap_or(0)) as u32;
         ProgressSnapshot {
             active: inner.active,
             phase: inner.phase.clone(),

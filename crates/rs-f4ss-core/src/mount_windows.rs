@@ -21,7 +21,7 @@ use winfsp_sys::{FspCleanupDelete, FILE_ACCESS_RIGHTS, FILE_FLAGS_AND_ATTRIBUTES
 
 use crate::backend::StorageBackend;
 use crate::error::MountError;
-use crate::handle::{WriteAtError, MAX_BUFFER_SIZE};
+use crate::handle::WriteAtError;
 use crate::mount::{FuseAdapter, MountConfig, MountEvent, MountStatus};
 
 // ---------------------------------------------------------------------------
@@ -341,7 +341,7 @@ impl<B: StorageBackend + 'static> FileSystemContext for WinFspAdapter<B> {
         &self,
         file_name: &U16CStr,
         create_options: u32,
-        granted_access: FILE_ACCESS_RIGHTS,
+        _granted_access: FILE_ACCESS_RIGHTS,
         file_info: &mut OpenFileInfo,
     ) -> std::result::Result<Self::FileContext, FspError> {
         let path = u16_to_path(file_name)?;
@@ -507,15 +507,9 @@ impl<B: StorageBackend + 'static> FileSystemContext for WinFspAdapter<B> {
             return Err(FspError::NTSTATUS(-1073741808)); // STATUS_NOT_A_DIRECTORY
         }
 
-        let dir_entry = match fsp(self.inner.block_on(self.inner.getattr(&context.path))) {
-            Ok(e) => e,
-            Err(e) => return Err(e),
-        };
+        let dir_entry = fsp(self.inner.block_on(self.inner.getattr(&context.path)))?;
 
-        let entries = match fsp(self.inner.block_on(self.inner.readdir(&context.path))) {
-            Ok(e) => e,
-            Err(e) => return Err(e),
-        };
+        let entries = fsp(self.inner.block_on(self.inner.readdir(&context.path)))?;
         tracing::debug!("[read_directory] {} entries", entries.len());
 
         let mut cursor = 0u32;
@@ -541,7 +535,7 @@ impl<B: StorageBackend + 'static> FileSystemContext for WinFspAdapter<B> {
         }
 
         let mut skip = !marker.is_none();
-        for (_i, entry) in entries.iter().enumerate() {
+        for entry in entries.iter() {
             if skip {
                 if let Some(marker_name) = marker.inner_as_cstr() {
                     if let Ok(entry_name) = U16CString::from_str(&entry.name) {
@@ -615,7 +609,7 @@ impl<B: StorageBackend + 'static> FileSystemContext for WinFspAdapter<B> {
         );
         let fh = context
             .handle
-            .ok_or_else(|| FspError::IO(std::io::ErrorKind::InvalidInput))?;
+            .ok_or(FspError::IO(std::io::ErrorKind::InvalidInput))?;
         if let Some(data) = self
             .inner
             .handles
@@ -646,7 +640,7 @@ impl<B: StorageBackend + 'static> FileSystemContext for WinFspAdapter<B> {
     ) -> std::result::Result<u32, FspError> {
         let fh = context
             .handle
-            .ok_or_else(|| FspError::IO(std::io::ErrorKind::InvalidInput))?;
+            .ok_or(FspError::IO(std::io::ErrorKind::InvalidInput))?;
         self.ensure_full_buffer(context, fh)?;
         if let Err(e) = fsp(self.inner.block_on(self.inner.write(fh, offset, buffer))) {
             context.record_write_failure();
@@ -688,7 +682,7 @@ impl<B: StorageBackend + 'static> FileSystemContext for WinFspAdapter<B> {
     ) -> std::result::Result<(), FspError> {
         let fh = context
             .handle
-            .ok_or_else(|| FspError::IO(std::io::ErrorKind::InvalidInput))?;
+            .ok_or(FspError::IO(std::io::ErrorKind::InvalidInput))?;
         self.ensure_full_buffer(context, fh)?;
         if new_size > Self::HYDRATE_MAX {
             context.record_write_failure();

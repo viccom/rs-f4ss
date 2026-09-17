@@ -974,3 +974,222 @@ mod tests {
         assert!(!entries_new[1].dir);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Fake-server read-path tests (R11)
+//
+// The existing tests above only cover URL building and XML parsing; `read()`
+// — the Range/206/416-fallback/64 MB-guard path — had no in-process
+// regression net. These follow the TcpListener template proven in
+// backend/common.rs (read_full_error_drains_body_for_connection_reuse).
+// ---------------------------------------------------------------------------
+
+#[cfg(all(test, feature = "webdav"))]
+mod read_path_tests {
+    use super::*;
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// Read one HTTP request off the socket (headers only; bodies unused here).
+    fn read_http_request(stream: &mut std::net::TcpStream) -> std::io::Result<String> {
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 1024];
+        loop {
+            let n = stream.read(&mut chunk)?;
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                break;
+            }
+        }
+        Ok(String::from_utf8_lossy(&buf).to_string())
+    }
+
+    fn backend_for(addr: std::net::SocketAddr) -> WebDavBackend {
+        WebDavBackend::new(&format!("http://{addr}"), false).unwrap()
+    }
+
+    /// Assert the request carried a Range header with the expected bounds.
+    fn expect_range(req: &str, offset: u64, size: u32) {
+        let end = offset + size as u64 - 1;
+        let range = req
+            .lines()
+            .find(|l| l.to_ascii_lowercase().starts_with("range:"))
+            .unwrap_or_else(|| panic!("no Range header in request: {req}"));
+        assert!(
+            range.contains(&format!("bytes={offset}-{end}")),
+            "unexpected Range: {range}"
+        );
+    }
+
+    /// 206 with Content-Range → body returned as-is (happy path).
+    #[tokio::test]
+    async fn read_206_returns_partial_body() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let req = read_http_request(&mut stream).unwrap();
+            expect_range(&req, 2, 5);
+            stream
+                .write_all(
+                    b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 2-6/100\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello",
+                )
+                .unwrap();
+        });
+
+        let backend = backend_for(addr);
+        let data = backend.read("/f.txt", 2, 5).await.unwrap();
+        assert_eq!(data, b"hello");
+    }
+
+    /// 200 full-body response → stream-skip logic extracts [offset, offset+size).
+    #[tokio::test]
+    async fn read_200_fallback_slices_requested_range() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let req = read_http_request(&mut stream).unwrap();
+            expect_range(&req, 3, 4);
+            // No Content-Range needed; full-body 200 with 10 bytes.
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nABCDEFGHIJ",
+                )
+                .unwrap();
+        });
+
+        let backend = backend_for(addr);
+        let data = backend.read("/f.txt", 3, 4).await.unwrap();
+        assert_eq!(data, b"DEFG");
+    }
+
+    /// 416 → retry without Range → full-body 200 → slice.
+    #[tokio::test]
+    async fn read_416_falls_back_to_full_download() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let req = read_http_request(&mut stream).unwrap();
+            expect_range(&req, 2, 3);
+            stream
+                .write_all(b"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n")
+                .unwrap();
+
+            // Second request must NOT carry a Range header.
+            let (mut s2, _) = listener.accept().unwrap();
+            let req2 = read_http_request(&mut s2).unwrap();
+            assert!(
+                !req2.to_ascii_lowercase().contains("range:"),
+                "retry must not send Range: {req2}"
+            );
+            s2.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nABCDEF")
+                .unwrap();
+        });
+
+        let backend = backend_for(addr);
+        let data = backend.read("/f.txt", 2, 3).await.unwrap();
+        assert_eq!(data, b"CDE");
+    }
+
+    /// 200 with a huge Content-Length for a small range → 64 MB guard rejects.
+    #[tokio::test]
+    async fn read_rejects_oversized_200_fallback() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = read_http_request(&mut stream).unwrap();
+            // Declared size beyond the 64 MB fallback cap.
+            let huge = 65 * 1024 * 1024u64;
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {huge}\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(head.as_bytes()).unwrap();
+            stream.write_all(b"trailer").unwrap();
+        });
+
+        let backend = backend_for(addr);
+        let err = backend.read("/f.txt", 0, 16).await.unwrap_err();
+        assert!(
+            matches!(err, BackendError::NotSupported(_)),
+            "expected NotSupported, got: {err:?}"
+        );
+    }
+
+    /// Content-Range mismatch on a 206 must be surfaced as an error, not
+    /// silently accepted (mirror the discipline in the other drivers).
+    ///
+    /// NOTE: the current implementation trusts the 206 body unconditionally;
+    /// this test PINS the contract the e2e suite relies on: a 206 whose body
+    /// length matches the request is accepted. A stricter Content-Range
+    /// cross-check is future work tracked by the test name below.
+    #[tokio::test]
+    async fn read_206_body_length_mismatch_is_visible() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = read_http_request(&mut stream).unwrap();
+            // Server lies: declares 5 bytes, sends 3.
+            stream
+                .write_all(
+                    b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-4/100\r\nContent-Length: 5\r\nConnection: close\r\n\r\nabc",
+                )
+                .unwrap();
+        });
+
+        let backend = backend_for(addr);
+        // reqwest enforces Content-Length on `bytes()`: the truncated body
+        // surfaces as an Internal error instead of silent data corruption.
+        let err = backend.read("/f.txt", 0, 5).await.unwrap_err();
+        assert!(
+            matches!(err, BackendError::Internal(_)),
+            "expected Internal error for truncated body, got: {err:?}"
+        );
+    }
+
+    /// 503 then 200 on a plain GET: send_with_retry recovers (R11 retry net).
+    #[tokio::test]
+    async fn send_with_retry_recovers_from_503() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = read_http_request(&mut stream).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 503 Service Unavailable
+Content-Length: 0
+Connection: keep-alive
+
+")
+                .unwrap();
+            // Retry must arrive (same connection or new — accept both).
+            let (mut s2, _) = listener.accept().unwrap();
+            let _ = read_http_request(&mut s2).unwrap();
+            s2.write_all(b"HTTP/1.1 200 OK
+Content-Length: 2
+Connection: close
+
+ok")
+                .unwrap();
+            tx.send(()).unwrap();
+        });
+
+        let http = HttpClient::new(&format!("http://{addr}/"), None, None).unwrap();
+        let url = http.build_url("/f.txt").unwrap();
+        let resp = http
+            .send_with_retry(reqwest::Method::GET, &url, vec![], None)
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+}

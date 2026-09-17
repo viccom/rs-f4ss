@@ -15,8 +15,6 @@
 //!   }
 //! }
 //! ```
-//! Optional Ed25519/minisign signature per asset when a public key is
-//! configured (defends against a compromised manifest host).
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,10 +33,6 @@ pub const DEFAULT_MANIFEST_URL: &str =
 /// Environment override for the manifest URL.
 pub const ENV_MANIFEST_URL: &str = "RS_F4SS_UPDATE_URL";
 
-/// Environment override for the minisign public key (enables signature
-/// verification when set).
-pub const ENV_PUBLIC_KEY: &str = "RS_F4SS_UPDATE_PUBKEY";
-
 /// Default manifest fetch timeout.
 const DEFAULT_MANIFEST_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -48,10 +42,6 @@ pub struct SelfUpdateConfig {
     /// URL of the JSON release manifest. Defaults to the GitHub releases
     /// endpoint, override via env `RS_F4SS_UPDATE_URL` or constructor.
     pub manifest_url: String,
-    /// Optional minisign public key (full `minisign.pub` content or the
-    /// bare base64 key string). When set, every asset MUST carry a
-    /// signature that validates against this key.
-    pub public_key: Option<String>,
     /// Download timeout for both the manifest fetch and the binary
     /// download (default: manifest 30s, binary 5min).
     pub timeout: Option<Duration>,
@@ -65,12 +55,8 @@ impl SelfUpdateConfig {
     pub fn from_env() -> Self {
         let manifest_url =
             std::env::var(ENV_MANIFEST_URL).unwrap_or_else(|_| DEFAULT_MANIFEST_URL.to_string());
-        let public_key = std::env::var(ENV_PUBLIC_KEY)
-            .ok()
-            .filter(|s| !s.trim().is_empty());
         Self {
             manifest_url,
-            public_key,
             timeout: None,
             retries: None,
         }
@@ -114,7 +100,6 @@ impl SelfUpdater {
             .map_err(Error::from)?;
         let source = HttpSource::with_client(config.manifest_url.clone(), client)?;
         let opts = UpdaterOptions {
-            public_key: config.public_key.clone(),
             retries: config.retries,
             timeout: config.timeout,
             ..Default::default()
@@ -135,11 +120,6 @@ impl SelfUpdater {
     /// Effective manifest URL.
     pub fn manifest_url(&self) -> &str {
         &self.config.manifest_url
-    }
-
-    /// Whether a minisign public key is configured.
-    pub fn has_public_key(&self) -> bool {
-        self.config.public_key.is_some()
     }
 
     /// Returns the current platform key in `os/arch` form (e.g. `linux/amd64`).
@@ -220,7 +200,6 @@ pub struct UpdateInfo {
     pub manifest_url: String,
     pub platform: String,
     pub exe_path: Option<String>,
-    pub public_key_configured: bool,
     /// True after a successful `apply()` and before `do_restart()`.
     /// Lets the Web UI surface a "Restart to apply" button only when
     /// the binary on disk is newer than what's running.
@@ -236,7 +215,6 @@ impl UpdateInfo {
             exe_path: SelfUpdater::current_exe_path()
                 .ok()
                 .map(|p| p.display().to_string()),
-            public_key_configured: updater.has_public_key(),
             pending_update: updater.has_pending_update(),
         }
     }
@@ -256,7 +234,6 @@ mod tests {
                 url: "https://example.com/binary".into(),
                 sha256: "0".repeat(64),
                 size: 100,
-                signature: None,
             },
         );
         Release {
@@ -294,13 +271,11 @@ mod tests {
             manifest_url: "https://example.com/latest.json".into(),
             platform: "linux/amd64".into(),
             exe_path: Some("/usr/bin/rs-f4ss".into()),
-            public_key_configured: false,
             pending_update: true,
         };
         let v = serde_json::to_value(&info).unwrap();
         assert_eq!(v["current_version"], "1.2.3");
         assert_eq!(v["platform"], "linux/amd64");
-        assert_eq!(v["public_key_configured"], false);
         assert_eq!(v["pending_update"], true);
     }
 
@@ -316,7 +291,6 @@ mod tests {
         // purely in-process.)
         let cfg = SelfUpdateConfig {
             manifest_url: "http://127.0.0.1:1/latest.json".into(),
-            public_key: None,
             timeout: Some(Duration::from_millis(100)),
             retries: Some(0),
         };
@@ -361,7 +335,6 @@ mod tests {
 
         let cfg = SelfUpdateConfig {
             manifest_url: format!("http://{addr}/latest.json"),
-            public_key: None,
             timeout: Some(Duration::from_secs(5)),
             retries: Some(0),
         };
@@ -393,7 +366,6 @@ mod tests {
                 url: "http://example.com/plan9".into(),
                 sha256: "0".repeat(64),
                 size: 100,
-                signature: None,
             },
         );
         let manifest = Release {
@@ -421,7 +393,6 @@ mod tests {
 
         let cfg = SelfUpdateConfig {
             manifest_url: format!("http://{addr}/latest.json"),
-            public_key: None,
             timeout: Some(Duration::from_secs(5)),
             retries: Some(0),
         };

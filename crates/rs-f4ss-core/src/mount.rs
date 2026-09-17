@@ -81,9 +81,15 @@ pub struct FuseAdapter<B: StorageBackend> {
     pub(crate) backend: Arc<B>,
     pub(crate) cache: CacheLayer,
     pub(crate) handles: HandleTable,
+    // inodes/mount_uid/mount_gid are only read by the Linux FUSE callbacks
+    // (mount_linux.rs); the Windows adapter compiles this struct but never
+    // touches them, hence the cfg-scoped allow (L6).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) inodes: Arc<InodeMap>,
     pub(crate) read_only: bool,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) mount_uid: u32,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) mount_gid: u32,
     event_tx: broadcast::Sender<MountEvent>,
     pub(crate) rt: tokio::runtime::Runtime,

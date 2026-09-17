@@ -70,8 +70,7 @@ impl AppState {
         };
 
         let auth = self.auth.lock().unwrap();
-        let incoming_hash = persistence::sha256_hex(pass);
-        user == auth.username && incoming_hash == auth.password_hash
+        persistence::verify_password(pass, &auth.password_hash) && user == auth.username
     }
 }
 
@@ -117,9 +116,10 @@ async fn auth_login(
     State(state): State<Arc<AppState>>,
     Json(req): Json<LoginRequest>,
 ) -> impl IntoResponse {
-    let hash = persistence::sha256_hex(&req.password);
     let auth = state.auth.lock().unwrap();
-    if req.username == auth.username && hash == auth.password_hash {
+    if persistence::verify_password(&req.password, &auth.password_hash)
+        && req.username == auth.username
+    {
         Json(serde_json::json!({"username": auth.username})).into_response()
     } else {
         (
@@ -143,7 +143,7 @@ async fn auth_change_password(
 ) -> impl IntoResponse {
     // Validate Basic Auth header first, then persist to disk
     // before updating in-memory state to avoid divergence on failure.
-    let new_hash = persistence::sha256_hex(&req.new_password);
+    let new_hash = persistence::hash_password(&req.new_password);
     {
         let mut auth = state.auth.lock().unwrap();
 
@@ -177,14 +177,13 @@ async fn auth_change_password(
         let Some((user, pass)) = credentials.split_once(':') else {
             return (StatusCode::UNAUTHORIZED, Json(error_json("Unauthorized"))).into_response();
         };
-        let header_hash = persistence::sha256_hex(pass);
-        if user != auth.username || header_hash != auth.password_hash {
+        let header_hash_ok = persistence::verify_password(pass, &auth.password_hash);
+        if user != auth.username || !header_hash_ok {
             return (StatusCode::UNAUTHORIZED, Json(error_json("Unauthorized"))).into_response();
         }
 
         // Verify old_password from body
-        let old_hash = persistence::sha256_hex(&req.old_password);
-        if old_hash != auth.password_hash {
+        if !persistence::verify_password(&req.old_password, &auth.password_hash) {
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(error_json("Old password is incorrect")),
@@ -1195,7 +1194,6 @@ mod tests {
                 url: "http://127.0.0.1:1/binary".into(),
                 sha256: "0".repeat(64),
                 size: 100,
-                signature: None,
             },
         );
         let manifest = selfupdater::Release {
@@ -1223,7 +1221,6 @@ mod tests {
 
         let cfg = SelfUpdateConfig {
             manifest_url: format!("http://{addr}/latest.json"),
-            public_key: None,
             timeout: Some(std::time::Duration::from_secs(5)),
             retries: Some(0),
         };
@@ -1271,7 +1268,6 @@ mod tests {
 
         let cfg = SelfUpdateConfig {
             manifest_url: "http://127.0.0.1:1/latest.json".into(),
-            public_key: None,
             timeout: Some(std::time::Duration::from_secs(1)),
             retries: Some(0),
         };
@@ -1317,7 +1313,6 @@ mod tests {
 
         let cfg = SelfUpdateConfig {
             manifest_url: "http://127.0.0.1:1/latest.json".into(),
-            public_key: None,
             timeout: Some(std::time::Duration::from_secs(1)),
             retries: Some(0),
         };
@@ -1360,7 +1355,6 @@ mod tests {
 
         let cfg = SelfUpdateConfig {
             manifest_url: "http://127.0.0.1:1/latest.json".into(),
-            public_key: None,
             timeout: Some(std::time::Duration::from_secs(1)),
             retries: Some(0),
         };
@@ -1420,7 +1414,6 @@ mod tests {
                 url: "http://127.0.0.1:1/binary".into(),
                 sha256: "0".repeat(64),
                 size: 100,
-                signature: None,
             },
         );
         // Same version as the running binary — `check()` returns None.
@@ -1449,7 +1442,6 @@ mod tests {
 
         let cfg = SelfUpdateConfig {
             manifest_url: format!("http://{addr}/latest.json"),
-            public_key: None,
             timeout: Some(std::time::Duration::from_secs(5)),
             retries: Some(0),
         };

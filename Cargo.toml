@@ -15,7 +15,7 @@ codegen-units = 1
 [workspace.package]
 version = "0.3.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.83"
 license = "MIT"
 repository = "https://github.com/viccom/rs-f4ss"
 
@@ -25,7 +25,7 @@ reqwest = { version = "0.12", features = ["rustls-tls", "stream"], default-featu
 quick-xml = "0.36"
 thiserror = "1"
 clap = { version = "4", features = ["derive", "env"] }
-fuser = { git = "https://github.com/cberner/fuser", branch = "master" }
+fuser = { git = "https://github.com/cberner/fuser", rev = "35732aad757661c4d1bdc8993d6c110576197690" }
 dashmap = "6"
 moka = { version = "0.12", features = ["future"] }
 tracing = "0.1"
@@ -43,4 +43,4 @@ sha2 = "0.10"
 dirs = "6"
 futures-util = "0.3"
 tokio-util = { version = "0.7", features = ["io"] }
-selfupdater = { path = "crates/selfupdater", default-features = false, features = ["server", "tls-rustls"] }
+selfupdater = { path = "crates/selfupdater", default-features = false, features = ["tls-rustls"] }
