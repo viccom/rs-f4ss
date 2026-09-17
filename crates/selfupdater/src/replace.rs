@@ -98,18 +98,33 @@ const BACKUP_SUFFIX: &str = ".update-backup";
 ///
 /// 1. Copy the current exe to `<exe><BACKUP_SUFFIX>` (same directory, so the
 ///    later rename stays on one volume).
-/// 2. Run `self_replace`.
+/// 2. Run the replace operation.
 /// 3. On success, delete the backup; on failure, attempt to restore the
 ///    backup over the (possibly damaged) install path and return the error.
 fn replace_with_backup(new_binary: &Path) -> Result<(), Error> {
     let exe = current_exe_resolved()?;
+    replace_with_backup_at(&exe, new_binary, |_| {
+        self_replace::self_replace(new_binary)
+    })
+}
+
+/// Core of the backup-replace cycle, parameterised for testability:
+/// `exe` is the install path, `do_replace` the replace operation.
+fn replace_with_backup_at<F>(
+    exe: &Path,
+    new_binary: &Path,
+    do_replace: F,
+) -> Result<(), Error>
+where
+    F: FnOnce(&Path) -> std::io::Result<()>,
+{
     let exe_dir = exe
         .parent()
-        .ok_or_else(|| Error::NoParentDir(exe.clone()))?
+        .ok_or_else(|| Error::NoParentDir(exe.to_path_buf()))?
         .to_path_buf();
     let file_name = exe
         .file_name()
-        .ok_or_else(|| Error::NoParentDir(exe.clone()))?
+        .ok_or_else(|| Error::NoParentDir(exe.to_path_buf()))?
         .to_os_string();
     let backup_path = exe_dir.join({
         let mut name = file_name;
@@ -117,9 +132,9 @@ fn replace_with_backup(new_binary: &Path) -> Result<(), Error> {
         name
     });
 
-    std::fs::copy(&exe, &backup_path)?;
+    std::fs::copy(exe, &backup_path)?;
 
-    match self_replace::self_replace(new_binary) {
+    match do_replace(new_binary) {
         Ok(()) => {
             if let Err(e) = std::fs::remove_file(&backup_path) {
                 if e.kind() != std::io::ErrorKind::NotFound {
@@ -133,7 +148,7 @@ fn replace_with_backup(new_binary: &Path) -> Result<(), Error> {
                 "self_replace failed: {e}; attempting restore from {}",
                 backup_path.display()
             );
-            match std::fs::copy(&backup_path, &exe) {
+            match std::fs::copy(&backup_path, exe) {
                 Ok(_) => tracing::info!("restored original binary from backup"),
                 Err(re) => tracing::error!(
                     "restore from backup failed: {re}; manual recovery: copy {} to {}",
@@ -331,5 +346,52 @@ mod tests {
             Error::Sha256Mismatch { .. } => {}
             _ => panic!("expected Sha256Mismatch, got: {}", err),
         }
+    }
+
+    /// A failing replace must restore the backup over the install path and
+    /// return the error (R5: no "no binary" window without recovery).
+    #[test]
+    fn test_replace_with_backup_restores_on_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("self.exe");
+        std::fs::write(&exe, b"ORIGINAL").unwrap();
+        let new_binary = dir.path().join("new.bin");
+        std::fs::write(&new_binary, b"NEW").unwrap();
+
+        let err = replace_with_backup_at(&exe, &new_binary, |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "injected failure",
+            ))
+        })
+        .unwrap_err();
+
+        let Error::Io(e) = &err else {
+            panic!("expected Error::Io, got: {err:?}");
+        };
+        assert_eq!(e.kind(), std::io::ErrorKind::Other);
+
+        // The install path was restored from the backup sidecar.
+        assert_eq!(std::fs::read(&exe).unwrap(), b"ORIGINAL");
+        // The sidecar is kept after a failed replace (manual recovery aid).
+        assert!(dir.path().join("self.exe.update-backup").exists());
+    }
+
+    /// A successful replace deletes the backup sidecar.
+    #[test]
+    fn test_replace_with_backup_cleans_up_on_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("self.exe");
+        std::fs::write(&exe, b"ORIGINAL").unwrap();
+        let new_binary = dir.path().join("new.bin");
+        std::fs::write(&new_binary, b"NEW").unwrap();
+
+        // The injected op simulates what self_replace does with new_binary;
+        // here it just needs to succeed.
+        replace_with_backup_at(&exe, &new_binary, |_new_binary| Ok(()))
+            .unwrap();
+
+        // Backup sidecar is cleaned up after a successful replace.
+        assert!(!dir.path().join("self.exe.update-backup").exists());
     }
 }
