@@ -171,6 +171,22 @@ impl HandleTable {
         }
     }
 
+    /// Length of the content we can currently serve with confidence:
+    /// dirty buffer length while unflushed writes exist, otherwise the
+    /// hydrated snapshot length (committed backend content). Used to clamp
+    /// constrained (Cache Manager) writes that carry page-tail padding.
+    pub fn valid_data_len(&self, fh: u64) -> Option<usize> {
+        let files = self.read_table();
+        let file = files.get(&fh)?;
+        if file.dirty {
+            Some(file.buffer.len())
+        } else if file.buffer.is_empty() {
+            None
+        } else {
+            Some(file.buffer.len())
+        }
+    }
+
     /// Clone the current dirty data without changing handle state.
     pub fn peek_dirty(&self, fh: u64) -> Option<(Arc<str>, Vec<u8>)> {
         let files = self.read_table();

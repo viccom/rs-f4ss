@@ -57,6 +57,27 @@ function Skip($name) {
     $script:Skipped.Add($name)
 }
 
+function WaitBackendContent($path, $expected, $timeoutMs = 5000) {
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($timeoutMs)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        try {
+            $c = [IO.File]::ReadAllText($path)
+            if ($c -eq $expected) { return $true }
+        } catch {}
+        Start-Sleep -Milliseconds 100
+    }
+    try { return ([IO.File]::ReadAllText($path) -eq $expected) } catch { return $false }
+}
+
+function WaitBackendGone($path, $timeoutMs = 5000) {
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($timeoutMs)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (-not (Test-Path $path)) { return $true }
+        Start-Sleep -Milliseconds 100
+    }
+    return -not (Test-Path $path)
+}
+
 function RunTest($name) {
     $script:Total++
     Write-Host ""
@@ -304,9 +325,10 @@ if ($emptySize -eq 0 -and [string]::IsNullOrEmpty($emptyContent)) {
 
 RunTest "Write — create new file"
 [IO.File]::WriteAllText("$MountPoint\newfile.txt", "e2e new content", [Text.UTF8Encoding]::new($false))
-Start-Sleep -Milliseconds 500
-$backendContent = [IO.File]::ReadAllText("$($script:DataDir)\newfile.txt")
-if ($backendContent -eq "e2e new content") {
+$ok = WaitBackendContent "$($script:DataDir)\newfile.txt" "e2e new content"
+$backendContent = ""
+if (Test-Path "$($script:DataDir)\newfile.txt") { $backendContent = [IO.File]::ReadAllText("$($script:DataDir)\newfile.txt") }
+if ($ok) {
     Pass "Backend has correct content"
 } else {
     Fail "Backend content wrong or missing: '$backendContent'"
@@ -314,9 +336,9 @@ if ($backendContent -eq "e2e new content") {
 
 RunTest "Write — overwrite existing file"
 [IO.File]::WriteAllText("$MountPoint\hello.txt", "updated content", [Text.UTF8Encoding]::new($false))
-Start-Sleep -Milliseconds 500
+$ok = WaitBackendContent "$($script:DataDir)\hello.txt" "updated content"
 $backendContent = [IO.File]::ReadAllText("$($script:DataDir)\hello.txt")
-if ($backendContent -eq "updated content") {
+if ($ok) {
     Pass "Backend updated"
 } else {
     Fail "Backend not updated: '$backendContent'"
@@ -358,9 +380,9 @@ $cpSrc = Join-Path $env:TEMP "e2e_cp_src.txt"
 [IO.File]::WriteAllText($cpSrc, "copied from local", [Text.UTF8Encoding]::new($false))
 Copy-Item $cpSrc "$MountPoint\copied.txt"
 Remove-Item $cpSrc -Force
-Start-Sleep -Milliseconds 500
+$ok = WaitBackendContent "$($script:DataDir)\copied.txt" "copied from local"
 $cpContent = [IO.File]::ReadAllText("$($script:DataDir)\copied.txt")
-if ($cpContent -eq "copied from local") {
+if ($ok) {
     Pass "cp content on backend"
 } else {
     Fail "cp content wrong or missing: '$cpContent'"

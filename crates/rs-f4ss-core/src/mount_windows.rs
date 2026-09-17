@@ -455,8 +455,65 @@ impl<B: StorageBackend + 'static> FileSystemContext for WinFspAdapter<B> {
         ))
     }
 
+    /// CREATE_ALWAYS / TRUNCATE_EXISTING on an existing file. The default
+    /// trait implementation returns STATUS_INVALID_DEVICE_REQUEST, which
+    /// the application sees as ERROR_INVALID_FUNCTION — overwriting a file
+    /// (e.g. [IO.File]::WriteAllText with FileMode.Create) failed outright.
+    fn overwrite(
+        &self,
+        context: &Self::FileContext,
+        _file_attributes: FILE_FLAGS_AND_ATTRIBUTES,
+        _replace_file_attributes: bool,
+        allocation_size: u64,
+        _extra_buffer: Option<&[u8]>,
+        file_info: &mut FileInfo,
+    ) -> std::result::Result<(), FspError> {
+        let fh = context
+            .handle
+            .ok_or(FspError::IO(std::io::ErrorKind::InvalidInput))?;
+        tracing::debug!(
+            "[overwrite] \"{}\" alloc={allocation_size}",
+            context.path
+        );
+        if allocation_size > Self::HYDRATE_MAX {
+            context.record_write_failure();
+            return Err(FspError::IO(std::io::ErrorKind::FileTooLarge));
+        }
+        // Drop the existing content: reset the buffer to empty and mark it
+        // dirty. Writes that follow extend it; the cleanup/close flush then
+        // PUTs the final content — or an empty file when nothing follows,
+        // which is exactly the truncate semantics.
+        self.inner
+            .handles
+            .replace_contents(fh, Vec::new())
+            .map_err(|e| {
+                context.record_write_failure();
+                write_error_to_fsp(e)
+            })?;
+        context.mark_materialized();
+        file_info.file_size = 0;
+        file_info.allocation_size = 0;
+        Ok(())
+    }
+
     fn cleanup(&self, context: &Self::FileContext, _file_name: Option<&U16CStr>, flags: u32) {
         tracing::debug!("[cleanup] \"{}\"", context.path);
+        // The last user handle is gone. With the Cache Manager enabled
+        // (file_info_timeout = MAX) the kernel keeps the file object alive
+        // and can defer `close` indefinitely, while cached writes may still
+        // arrive AFTER this point. Submit whatever dirty data we already
+        // hold now; `close` remains the backstop for data that arrives
+        // later (a failed flush restores the dirty buffer for that retry).
+        if let Some(fh) = context.handle {
+            if !context.is_dir && self.inner.handles.dirty_len(fh).is_some() {
+                if let Err(e) = self.inner.block_on(self.inner.flush(fh)) {
+                    tracing::warn!(
+                        "[cleanup] flush \"{}\" failed (close will retry): {e}",
+                        context.path
+                    );
+                }
+            }
+        }
         if !context.wants_delete_in_cleanup(flags) {
             return;
         }
@@ -490,6 +547,44 @@ impl<B: StorageBackend + 'static> FileSystemContext for WinFspAdapter<B> {
                     0
                 };
             }
+        }
+        Ok(())
+    }
+
+    /// Set basic file information (timestamps, attributes).
+    ///
+    /// Not implementing this returns STATUS_INVALID_DEVICE_REQUEST, which
+    /// the application sees as ERROR_INVALID_FUNCTION — recursive deletes
+    /// (`Remove-Item -Recurse -Force`) touch attributes on every child and
+    /// then fail. The backends expose no metadata mutation, so we accept
+    /// the request, keep the backend's authoritative values, and only
+    /// report back what was asked for.
+    fn set_basic_info(
+        &self,
+        context: &Self::FileContext,
+        _file_attributes: u32,
+        creation_time: u64,
+        last_access_time: u64,
+        last_write_time: u64,
+        last_change_time: u64,
+        file_info: &mut FileInfo,
+    ) -> std::result::Result<(), FspError> {
+        tracing::trace!("[set_basic_info] \"{}\"", context.path);
+        // Report the (unchanged) backend state, honouring the requested
+        // timestamps so callers that read-back see what they set.
+        let entry = fsp(self.inner.block_on(self.inner.getattr(&context.path)))?;
+        set_file_info_from_entry(&entry, file_info);
+        if creation_time != 0 {
+            file_info.creation_time = creation_time;
+        }
+        if last_access_time != 0 {
+            file_info.last_access_time = last_access_time;
+        }
+        if last_write_time != 0 {
+            file_info.last_write_time = last_write_time;
+        }
+        if last_change_time != 0 {
+            file_info.last_write_time = last_change_time;
         }
         Ok(())
     }
@@ -635,27 +730,50 @@ impl<B: StorageBackend + 'static> FileSystemContext for WinFspAdapter<B> {
         buffer: &[u8],
         offset: u64,
         _write_to_eof: bool,
-        _constrained_io: bool,
+        constrained_io: bool,
         file_info: &mut FileInfo,
     ) -> std::result::Result<u32, FspError> {
         let fh = context
             .handle
             .ok_or(FspError::IO(std::io::ErrorKind::InvalidInput))?;
+        tracing::trace!(
+            "[write] \"{}\" off={offset} len={} constrained={constrained_io} cur_size={}",
+            context.path,
+            buffer.len(),
+            file_info.file_size
+        );
+        // Constrained I/O (used by the Cache Manager's lazy writer) must not
+        // extend the file: the CM flushes whole pages past EOF, so without
+        // clamping every small write would balloon the file to the page
+        // size. Same semantics as WinFsp's memfs. NOTE: `file_info.file_size`
+        // is an OUTPUT parameter here — its incoming value is garbage, so
+        // clamp against the data we actually hold (the application's writes
+        // recorded in the buffer), never against file_info.
+        let effective_len = if constrained_io {
+            let valid_end = self.inner.handles.valid_data_len(fh).unwrap_or(0) as u64;
+            if offset >= valid_end {
+                return Ok(0);
+            }
+            (buffer.len() as u64).min(valid_end - offset) as usize
+        } else {
+            buffer.len()
+        };
+        let data = &buffer[..effective_len];
         self.ensure_full_buffer(context, fh)?;
-        if let Err(e) = fsp(self.inner.block_on(self.inner.write(fh, offset, buffer))) {
+        if let Err(e) = fsp(self.inner.block_on(self.inner.write(fh, offset, data))) {
             context.record_write_failure();
             return Err(e);
         }
-        if !buffer.is_empty() {
+        if !data.is_empty() {
             context.mark_materialized();
         }
         // Update size locally instead of extra HTTP PROPFIND per write.
-        let new_size = offset + buffer.len() as u64;
+        let new_size = offset + data.len() as u64;
         if new_size > file_info.file_size {
             file_info.file_size = new_size;
             file_info.allocation_size = (new_size + 4095) & !4095;
         }
-        Ok(buffer.len() as u32)
+        Ok(data.len() as u32)
     }
 
     fn flush(
@@ -677,12 +795,22 @@ impl<B: StorageBackend + 'static> FileSystemContext for WinFspAdapter<B> {
         &self,
         context: &Self::FileContext,
         new_size: u64,
-        _set_allocation_size: bool,
+        set_allocation_size: bool,
         file_info: &mut FileInfo,
     ) -> std::result::Result<(), FspError> {
         let fh = context
             .handle
             .ok_or(FspError::IO(std::io::ErrorKind::InvalidInput))?;
+        // Allocation size is a capacity hint (e.g. .NET FileStreams
+        // pre-allocate a page on creation): growing it must not change the
+        // file size, contents, or dirty state — treating it as a truncate
+        // zero-filled every newly written file out to the page size. Only a
+        // shrink below the current file size falls through to a real
+        // truncate. Same semantics as WinFsp's memfs.
+        if set_allocation_size && new_size >= file_info.file_size {
+            file_info.allocation_size = (new_size + 4095) & !4095;
+            return Ok(());
+        }
         self.ensure_full_buffer(context, fh)?;
         if new_size > Self::HYDRATE_MAX {
             context.record_write_failure();
@@ -869,9 +997,20 @@ pub fn mount_windows<B: StorageBackend + 'static>(
         // - PotPlayer's repeated open/close probes are served from OS cache
         // - Sequential reads get OS-level prefetch instead of per-request callbacks
         // Same pattern used by rclone mount, SSHFS-Win, and WinFsp samples.
-        .file_info_timeout(u32::MAX)
+        //
+        // file_info_timeout must stay BOUNDED (5s): with u32::MAX the Cache
+        // Manager defers write-back indefinitely, and the cleanup-time
+        // flush-and-purge (below) can then drop its dirty pages before the
+        // write callback ever runs — data silently lost on overwrite. A
+        // 5s timeout forces the CM to flush on a short cycle, so writes
+        // reach the filesystem (and then the backend) reliably.
+        .file_info_timeout(5000)
         .dir_info_timeout(u32::MAX)
-        .volume_info_timeout(u32::MAX);
+        .volume_info_timeout(u32::MAX)
+        // Flush and purge the Cache Manager's dirty pages when the last
+        // user handle is cleaned up, so buffered data reaches the backend
+        // promptly instead of lingering in kernel memory.
+        .flush_and_purge_on_cleanup(true);
     if config.read_only {
         params.read_only_volume(true);
     }
@@ -971,5 +1110,180 @@ mod tests {
         let ctx = FileContext::new_test("/placeholder.bin", false, true);
         ctx.record_write_failure();
         assert_eq!(ctx.close_action(), CloseAction::RollbackPlaceholder);
+    }
+
+    // -----------------------------------------------------------------
+    // Write-path regression tests (Windows e2e found two real bugs:
+    // dirty data never submitted because close is deferred by the Cache
+    // Manager, and CREATE_ALWAYS/TRUNCATE_EXISTING failed with
+    // ERROR_INVALID_FUNCTION because `overwrite` was not implemented).
+    // -----------------------------------------------------------------
+
+    fn winfsp_test_adapter() -> WinFspAdapter<crate::mount::MockBackend> {
+        use std::path::PathBuf;
+        let config = MountConfig {
+            mountpoint: PathBuf::from("Z:"),
+            read_only: false,
+            cache_ttl: std::time::Duration::from_secs(60),
+            cache_size: 256,
+            allow_other: false,
+            mount_uid: 0,
+            mount_gid: 0,
+            on_mount_ready: None,
+            on_set_unmount: None,
+        };
+        WinFspAdapter {
+            inner: Arc::new(FuseAdapter::new(crate::mount::MockBackend::new(), &config)),
+            dispatcher_alive: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    /// cleanup (last user handle gone) must submit the dirty buffer to the
+    /// backend — close can be deferred indefinitely by the Cache Manager.
+    #[test]
+    fn test_cleanup_flushes_dirty_buffer_to_backend() {
+        let adapter = winfsp_test_adapter();
+        let fh = adapter
+            .inner
+            .block_on(adapter.inner.open("/flush.txt", false))
+            .unwrap();
+        adapter
+            .inner
+            .block_on(adapter.inner.write(fh, 0, b"payload"))
+            .unwrap();
+        assert!(adapter.inner.handles.dirty_len(fh).is_some());
+
+        let ctx = FileContext::new(
+            "/flush.txt".to_string(),
+            false,
+            Some(fh),
+            PlaceholderState::None,
+            false,
+        );
+        FileSystemContext::cleanup(&adapter, &ctx, None, 0);
+
+        assert!(
+            adapter.inner.handles.dirty_len(fh).is_none(),
+            "dirty buffer must be submitted on cleanup"
+        );
+        assert_eq!(
+            adapter
+                .inner
+                .block_on(adapter.inner.read(fh, 0, 7))
+                .unwrap(),
+            b"payload",
+            "content must be readable after cleanup flush"
+        );
+    }
+
+    /// overwrite (CREATE_ALWAYS / TRUNCATE_EXISTING) must reset the handle
+    /// buffer to empty + dirty, so a following write lands in a clean file
+    /// and a close without writes PUTs an empty file (correct truncate).
+    #[test]
+    fn test_overwrite_truncates_and_resets_dirty() {
+        let adapter = winfsp_test_adapter();
+        let fh = adapter
+            .inner
+            .block_on(adapter.inner.open("/old.txt", false))
+            .unwrap();
+        adapter
+            .inner
+            .block_on(adapter.inner.write(fh, 0, b"OLD DATA"))
+            .unwrap();
+        adapter.inner.block_on(adapter.inner.flush(fh)).unwrap();
+
+        let ctx = FileContext::new(
+            "/old.txt".to_string(),
+            false,
+            Some(fh),
+            PlaceholderState::None,
+            false,
+        );
+        let mut file_info = FileInfo::default();
+        FileSystemContext::overwrite(
+            &adapter,
+            &ctx,
+            0,
+            false,
+            0,
+            None,
+            &mut file_info,
+        )
+        .unwrap();
+
+        assert_eq!(adapter.inner.handles.dirty_len(fh), Some(0));
+        assert_eq!(file_info.file_size, 0);
+        assert_eq!(file_info.allocation_size, 0);
+
+        // Simulate the application writing the new content, then cleanup.
+        adapter
+            .inner
+            .block_on(adapter.inner.write(fh, 0, b"NEW"))
+            .unwrap();
+        FileSystemContext::cleanup(&adapter, &ctx, None, 0);
+        assert!(adapter.inner.handles.dirty_len(fh).is_none());
+    }
+
+    /// set_file_size with set_allocation_size=TRUE is a capacity hint:
+    /// growing it must NOT change the file size, contents, or dirty state.
+    /// (.NET FileStreams pre-allocate a page; treating it as a truncate
+    /// zero-filled every newly written file to 4096 bytes.)
+    #[test]
+    fn test_set_allocation_size_is_capacity_hint_not_truncate() {
+        let adapter = winfsp_test_adapter();
+        let fh = adapter
+            .inner
+            .block_on(adapter.inner.open("/alloc.txt", false))
+            .unwrap();
+        adapter
+            .inner
+            .block_on(adapter.inner.write(fh, 0, b"DATA"))
+            .unwrap();
+        adapter.inner.block_on(adapter.inner.flush(fh)).unwrap();
+        assert!(adapter.inner.handles.dirty_len(fh).is_none());
+
+        let ctx = FileContext::new(
+            "/alloc.txt".to_string(),
+            false,
+            Some(fh),
+            PlaceholderState::None,
+            false,
+        );
+        // Grow allocation to one page (what .NET does on file creation).
+        let mut file_info = FileInfo {
+            file_size: 4,
+            allocation_size: 4096,
+            ..Default::default()
+        };
+        FileSystemContext::set_file_size(
+            &adapter,
+            &ctx,
+            4096,
+            true,
+            &mut file_info,
+        )
+        .unwrap();
+
+        // File size unchanged, buffer untouched, no phantom dirty data.
+        assert_eq!(file_info.file_size, 4);
+        assert!(adapter.inner.handles.dirty_len(fh).is_none());
+        assert_eq!(
+            adapter
+                .inner
+                .block_on(adapter.inner.read(fh, 0, 4))
+                .unwrap(),
+            b"DATA"
+        );
+
+        // Shrinking allocation BELOW the file size truncates.
+        FileSystemContext::set_file_size(&adapter, &ctx, 2, true, &mut file_info).unwrap();
+        assert_eq!(file_info.file_size, 2);
+        assert_eq!(
+            adapter
+                .inner
+                .block_on(adapter.inner.read(fh, 0, 4))
+                .unwrap(),
+            b"DA"
+        );
     }
 }
