@@ -329,6 +329,20 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_sha256_wrong_content_rejected() {
+        // L1: the original case-insensitivity check only unwrapped; assert
+        // the digest actually matches the file content it claims.
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), b"other content").unwrap();
+        let err = validate_sha256(
+            tmp.path(),
+            "916f0027a575074ce72a331777c3478d6513f786a591bd892da1a577bf2335f9",
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Sha256Mismatch { .. }), "got: {err:?}");
+    }
+
+    #[test]
     fn test_validate_sha256_match() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(tmp.path(), b"test data").unwrap();
