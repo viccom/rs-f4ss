@@ -917,10 +917,16 @@ fn handle_serve(listen: &str, config_path: Option<&str>) -> Result<(), Box<dyn s
 
     let auth = rs_f4ss_core::persistence::load_auth(&path);
     tracing::info!("Auth user: {}", auth.username);
-    if auth.username == "admin"
-        && auth.password_hash == rs_f4ss_core::persistence::sha256_hex("admin")
-    {
+    let default_creds = rs_f4ss_core::persistence::is_default_auth(&auth);
+    if default_creds {
         tracing::warn!("Using default credentials (admin:admin). Please change the password via Web UI or CLI.");
+        if !is_loopback_addr(listen) {
+            return Err(format!(
+                "Refusing to serve on {listen} with default credentials (admin:admin). \
+                 Change the password first (Web UI or `rs-f4ss serve` on 127.0.0.1), \
+                 or bind to a loopback address, e.g. --listen 127.0.0.1:8080."
+            ).into());
+        }
     }
 
     let state = std::sync::Arc::new(rs_f4ss_core::api::AppState {
@@ -1015,7 +1021,7 @@ fn main() {
 // ---------------------------------------------------------------------------
 
 /// Whether `addr` binds to this machine only.
-#[cfg(feature = "serve")]
+#[cfg(any(feature = "api", feature = "serve"))]
 fn is_loopback_addr(addr: &str) -> bool {
     use std::net::{IpAddr, Ipv6Addr};
 

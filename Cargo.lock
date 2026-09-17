@@ -3571,6 +3571,7 @@ dependencies = [
  "moka",
  "percent-encoding",
  "quick-xml 0.36.2",
+ "rand",
  "reqwest 0.12.28",
  "selfupdater",
  "serde",
