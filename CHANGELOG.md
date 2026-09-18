@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-18
+
 ### Added
 - GitHub Actions CI workflow (`.github/workflows/ci.yml`)
   - `rustfmt`, `clippy`, unit/integration tests across the feature matrix
@@ -31,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   start offset before the body is trusted
 - `webdav`/`http` backends: primary ranged GET goes through the retry
   wrapper (transient 5xx recoverable)
+- `webdav` backend: 200-fallback streaming skip capped at 64 MiB (chunked
+  responses included); zero-length reads no longer hit the network
+- Linux: FUSE open now consults the handle grace table (close/reopen
+  window reuse previously never triggered on Linux)
+- read window keeps its known file size when the attribute cache misses;
+  a parked window without a size witness is never reused
 
 ### Changed
 - Self-update signature chain removed (Option B): updates are SHA-256-only

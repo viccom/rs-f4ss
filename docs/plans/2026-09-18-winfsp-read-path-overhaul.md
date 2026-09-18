@@ -919,3 +919,5 @@ cd /e/GitHub/rs-f4ss && git merge --no-ff feat/read-window-model
 - R-B12（低，存量）206 body 无大小上限缓冲（异常服务器前提下内存峰值）。
 
 **修复后验证**：Windows 全量 28+287+11+24 绿 + clippy 零警告；WSL 全量 28+284+11+24 绿 + 三套 e2e 51/55/40；Windows e2e.ps1 51/51；基准复核尾读 0.03s/1 请求、small×100 14ms、顺序 194/215 MB/s（无回退）。
+
+**裁决（2026-09-18，负责人确认）**：R-A1/R-B7/R-B10 暂不修复，作为已知限制接受。实测背景：双机 serve↔desktop 场景下 PotPlayer 播放视频时，因寻址延迟（每次窗口 miss 拉满 4 MiB）触发播放器"慢源→整文件缓冲"策略（serve 端 Range/延迟均验证健康、挂载数据哈希级验证无损坏）。已评估的后续方案：rclone 式自适应分块（首窗 1 MiB 顺序翻倍至 32 MiB）+ HandleTable 分片锁，合计约 500-700 行（含测试），另议。
