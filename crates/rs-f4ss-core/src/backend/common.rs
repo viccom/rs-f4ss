@@ -103,6 +103,21 @@ impl HttpClient {
         headers: Vec<(&str, String)>,
         body: Option<Bytes>,
     ) -> Result<reqwest::Response, BackendError> {
+        self.send_with_retry_timeout(method, url, headers, body, Duration::from_secs(30))
+            .await
+    }
+
+    /// send_with_retry with a per-request timeout override: large ranged
+    /// reads (4-16 MiB on slow links) need a budget longer than the 30 s
+    /// default. Same retry semantics, only `req.timeout(timeout)` differs.
+    pub(crate) async fn send_with_retry_timeout(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        headers: Vec<(&str, String)>,
+        body: Option<Bytes>,
+        timeout: Duration,
+    ) -> Result<reqwest::Response, BackendError> {
         const MAX_RETRIES: u32 = 3;
         let mut attempt = 0u32;
         // Only retry idempotent read operations. PUT/MKCOL/DELETE/MOVE are not
@@ -112,7 +127,7 @@ impl HttpClient {
 
         loop {
             let mut req = self.client.request(method.clone(), url);
-            req = req.timeout(Duration::from_secs(30));
+            req = req.timeout(timeout);
             if let Some(ref auth) = self.auth_header {
                 req = req.header("Authorization", auth.as_str());
             }

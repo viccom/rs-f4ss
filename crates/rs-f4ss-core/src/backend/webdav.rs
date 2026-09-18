@@ -234,20 +234,25 @@ impl WebDavBackend {
             .checked_add(u64::from(size))
             .and_then(|e| e.checked_sub(1));
 
-        let range_header = end_inclusive.map(|ei| format!("bytes={offset}-{ei}"));
-
-        let mut req_builder = self.http.client.request(Method::GET, url);
-        if let Some(ref auth) = self.http.auth_header {
-            req_builder = req_builder.header("Authorization", auth.as_str());
+        // Primary read goes through the retry wrapper (same standing as the
+        // metadata paths): transient 5xx/connection failures get 3 backoff
+        // retries. GET is idempotent, so should_retry_request allows it.
+        // Authorization is injected by send_with_retry_timeout; the 300 s
+        // budget matches the previous direct-request timeout.
+        let mut headers: Vec<(&str, String)> = Vec::new();
+        if let Some(ei) = end_inclusive {
+            headers.push(("Range", format!("bytes={offset}-{ei}")));
         }
-        if let Some(ref rh) = range_header {
-            req_builder = req_builder.header("Range", rh);
-        }
-        req_builder = req_builder.timeout(std::time::Duration::from_secs(300));
-        let resp = req_builder
-            .send()
-            .await
-            .map_err(|e| BackendError::ConnectionFailed(format!("GET: {e}")))?;
+        let resp = self
+            .http
+            .send_with_retry_timeout(
+                Method::GET,
+                url,
+                headers,
+                None,
+                std::time::Duration::from_secs(300),
+            )
+            .await?;
 
         let status = resp.status().as_u16();
 
@@ -268,6 +273,24 @@ impl WebDavBackend {
 
         // 206 Partial Content — server honored Range, read the partial body directly
         if status == 206 {
+            // Validate the start offset in Content-Range before trusting the
+            // body: a misrouted or cached response would otherwise silently
+            // serve shifted data.
+            if let Some(cr) = resp
+                .headers()
+                .get("content-range")
+                .and_then(|v| v.to_str().ok())
+            {
+                if !cr.trim_start().starts_with(&format!("bytes {offset}-")) {
+                    let msg = format!(
+                        "server returned wrong range: requested offset {offset}, got `{cr}`"
+                    );
+                    super::common::drain_response(resp).await;
+                    return Err(BackendError::Internal(msg));
+                }
+            }
+            // Header missing → tolerated: the body length is still bounded by
+            // reqwest's Content-Length enforcement.
             let data = resp
                 .bytes()
                 .await
@@ -1277,6 +1300,53 @@ mod read_path_tests {
             matches!(err, BackendError::Internal(_)),
             "expected Internal error for truncated body, got: {err:?}"
         );
+    }
+
+    /// A 206 whose Content-Range starts at the wrong offset must surface as
+    /// an error, not silently serve shifted data (write-offset guard).
+    #[tokio::test]
+    async fn read_206_wrong_content_range_start_is_an_error() {
+        // Request bytes=10-14; the server answers Content-Range: bytes 0-4/100.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let req = read_http_request(&mut s).unwrap();
+            expect_range(&req, 10, 5);
+            s.write_all(
+                b"HTTP/1.1 206\r\nContent-Range: bytes 0-4/100\r\n\
+                  Content-Length: 5\r\nConnection: close\r\n\r\nhello",
+            )
+            .unwrap();
+        });
+        let backend = backend_for(addr);
+        let err = backend.read("/f.bin", 10, 5).await.unwrap_err();
+        assert!(format!("{err}").contains("wrong range"), "{err}");
+    }
+
+    /// A 503 followed by a correct 206: the primary read path must go through
+    /// send_with_retry (the old direct client.request failed on the first 503).
+    #[tokio::test]
+    async fn read_ranged_get_retries_after_503() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut s1, _) = listener.accept().unwrap();
+            let _ = read_http_request(&mut s1).unwrap();
+            s1.write_all(b"HTTP/1.1 503\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            let (mut s2, _) = listener.accept().unwrap();
+            let req = read_http_request(&mut s2).unwrap();
+            expect_range(&req, 0, 5);
+            s2.write_all(
+                b"HTTP/1.1 206\r\nContent-Range: bytes 0-4/10\r\n\
+                  Content-Length: 5\r\nConnection: close\r\n\r\nworld",
+            )
+            .unwrap();
+        });
+        let backend = backend_for(addr);
+        let data = backend.read("/f.bin", 0, 5).await.unwrap();
+        assert_eq!(data, b"world");
     }
 
     /// 503 then 200 on a plain GET: send_with_retry recovers (R11 retry net).
