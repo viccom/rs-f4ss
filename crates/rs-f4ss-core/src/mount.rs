@@ -223,13 +223,9 @@ impl<B: StorageBackend> FuseAdapter<B> {
         }
 
         // 1. 取已知大小（moka 命中零网络；与旧 prefetch 分支同频调用，
-        //    服务端变化可见性与现状一致）
-        let known = self
-            .cache
-            .get_attr(&path)
-            .await
-            .map(|c| c.entry.size)
-            .filter(|s| *s > 0);
+        //    服务端变化可见性与现状一致）。0 也是合法已知 size：
+        //    Some(0) 在 read_at 里天然零请求，不得被 filter 丢弃（R-A3）。
+        let known = self.cache.get_attr(&path).await.map(|c| c.entry.size);
 
         // 2. 窗口读。HandleTable::read_window 内部持写锁跨 await：
         //    句柄内读串行（cydrive K41 同语义），锁不外泄。
@@ -309,15 +305,18 @@ impl<B: StorageBackend> FuseAdapter<B> {
                 }
                 self.cache.invalidate(&file.path).await;
                 self.cache.invalidate_parent(&file.path).await;
-            } else if let Some(w) = file.window.window.take() {
+            } else if let Some(size) = file.window.size {
                 // 非 dirty 且窗口非空 → 停车，宽限期内重开可复用（D4）。
-                // size 见证 = 关闭时已知的文件大小。
-                recover_lock(self.grace.lock()).park(
-                    &file.path,
-                    w,
-                    file.window.size.unwrap_or(0),
-                    std::time::Instant::now(),
-                );
+                // size 见证 = 关闭时已知的文件大小；size 未知（None）不停车
+                // ——否则重开时 get_attr 也 None → 0==0 恒真复用无见证窗口（R-A4）。
+                if let Some(w) = file.window.window.take() {
+                    recover_lock(self.grace.lock()).park(
+                        &file.path,
+                        w,
+                        size,
+                        std::time::Instant::now(),
+                    );
+                }
             }
         }
         Ok(())
@@ -786,6 +785,60 @@ mod tests {
     }
 
     #[test]
+    fn read_keeps_known_size_when_attr_cache_invalidated() {
+        // attr 缓存失效（get_attr 纯缓存查询、零网络）不得把句柄已知的
+        // window.size 降级为 None——否则 EOF 钳制静默失效，越过 EOF 的读
+        // 会真的发请求（R-A3）。
+        let backend = MockBackend::new();
+        backend.add_file("/f.bin", "f.bin", 100, &[7u8; 100]);
+        let adapter = FuseAdapter::new(backend, &make_config());
+        let rt = &adapter.rt;
+
+        rt.block_on(adapter.getattr("/f.bin")).unwrap();
+        let fh = rt.block_on(adapter.open("/f.bin", false)).unwrap();
+        let _ = rt.block_on(adapter.read(fh, 0, 10)).unwrap();
+        let calls_before = adapter.backend.as_ref().read_calls().len();
+
+        rt.block_on(adapter.cache.invalidate("/f.bin"));
+
+        let out = rt.block_on(adapter.read(fh, 100, 4096)).unwrap(); // offset == size
+        assert!(out.is_empty());
+        assert_eq!(
+            adapter.backend.as_ref().read_calls().len(),
+            calls_before,
+            "attr cache miss must not downgrade the known size"
+        );
+        let out2 = rt.block_on(adapter.read(fh, 500, 16)).unwrap();
+        assert!(out2.is_empty());
+        assert_eq!(
+            adapter.backend.as_ref().read_calls().len(),
+            calls_before,
+            "no request past EOF after cache invalidation"
+        );
+        rt.block_on(adapter.release(fh)).unwrap();
+    }
+
+    #[test]
+    fn zero_byte_file_read_makes_no_backend_request() {
+        // size == 0 也是合法的已知 size：Some(0) 在 read_at 里天然零请求（R-A3）。
+        let backend = MockBackend::new();
+        backend.add_file("/empty.bin", "empty.bin", 0, b"");
+        let adapter = FuseAdapter::new(backend, &make_config());
+        let rt = &adapter.rt;
+
+        rt.block_on(adapter.getattr("/empty.bin")).unwrap();
+        let fh = rt.block_on(adapter.open("/empty.bin", false)).unwrap();
+        let out = rt.block_on(adapter.read(fh, 0, 16)).unwrap();
+        assert!(out.is_empty());
+        assert_eq!(
+            adapter.backend.as_ref().read_calls().len(),
+            0,
+            "0-byte file with known size must not hit the backend"
+        );
+        rt.block_on(adapter.release(fh)).unwrap();
+    }
+
+    #[test]
     fn repeated_reads_within_window_do_not_refetch() {
         // 4 KiB 文件读 3 次（0..10, 10..20, 20..30）→ backend read_calls == 1
         let backend = MockBackend::new();
@@ -857,6 +910,31 @@ mod tests {
             adapter.backend.as_ref().read_calls().len(),
             1,
             "second open served from grace window"
+        );
+        rt.block_on(adapter.release(fh2)).unwrap();
+    }
+
+    #[test]
+    fn window_without_size_witness_is_not_parked() {
+        // 不预热 attr → 关闭时 window.size 为 None。若以 unwrap_or(0) 停车，
+        // 重开时 get_attr 也 None → 0==0 恒真复用无见证窗口；必须不停车（R-A4）。
+        let backend = MockBackend::new();
+        backend.add_file("/f.bin", "f.bin", 8192, &[9u8; 8192]);
+        let adapter = FuseAdapter::new(backend, &make_config());
+        let rt = &adapter.rt;
+
+        // 故意不预热 attr：read 后 window.size 仍是 None
+        let fh1 = rt.block_on(adapter.open("/f.bin", false)).unwrap();
+        let _ = rt.block_on(adapter.read(fh1, 0, 4096)).unwrap();
+        rt.block_on(adapter.release(fh1)).unwrap();
+
+        let fh2 = rt.block_on(adapter.open("/f.bin", false)).unwrap();
+        let out = rt.block_on(adapter.read(fh2, 0, 4096)).unwrap();
+        assert_eq!(out.len(), 4096);
+        assert_eq!(
+            adapter.backend.as_ref().read_calls().len(),
+            2,
+            "no size witness → window must not be parked and reused"
         );
         rt.block_on(adapter.release(fh2)).unwrap();
     }

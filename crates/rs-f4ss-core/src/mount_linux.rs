@@ -11,9 +11,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 #[cfg(target_os = "linux")]
 use fuser::{
     BsdFileFlags, Config, Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags,
-    Generation, INodeNo, KernelConfig, LockOwner, MountOption, OpenFlags, RenameFlags, ReplyAttr,
-    ReplyCreate, ReplyData, ReplyDirectory, ReplyDirectoryPlus, ReplyEmpty, ReplyEntry, ReplyOpen,
-    ReplyStatfs, ReplyWrite, Request, SessionACL,
+    Generation, INodeNo, KernelConfig, LockOwner, MountOption, OpenAccMode, OpenFlags, RenameFlags,
+    ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyDirectoryPlus, ReplyEmpty, ReplyEntry,
+    ReplyOpen, ReplyStatfs, ReplyWrite, Request, SessionACL,
 };
 #[cfg(target_os = "linux")]
 use tracing::debug;
@@ -235,7 +235,7 @@ impl<B: StorageBackend> Filesystem for FuseAdapter<B> {
         });
     }
 
-    fn open(&self, _req: &Request, ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {
+    fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
         let path = match self.inodes.get_path(ino.0) {
             Some(p) => p,
             None => {
@@ -244,7 +244,16 @@ impl<B: StorageBackend> Filesystem for FuseAdapter<B> {
             }
         };
         let path_str = path.to_string_lossy().to_string();
-        let fh = self.handles.allocate(path_str.clone());
+        // 挂载层统一 open：allocate + D4 宽限表取车（R-A2，原实现绕过
+        // grace 表、Linux 上只停不取）；写打开不取车。
+        let write = flags.acc_mode() != OpenAccMode::O_RDONLY;
+        let fh = match self.block_on(self.open(&path_str, write)) {
+            Ok(fh) => fh,
+            Err(e) => {
+                reply.error(map_mount_error(&e));
+                return;
+            }
+        };
 
         // Use cached attr only — no extra stat. If the cache entry exists and
         // the file was recently stat'd (within moka TTL), the kernel page cache

@@ -107,6 +107,22 @@ async fn never_serves_past_eof_when_backend_overdelivers() {
 }
 
 #[tokio::test]
+async fn stored_window_data_is_clamped_to_window_size() {
+    // 病态后端超发（fetch 返回 8192 > window_size 4096）→ 入窗数据必须
+    // 截断到 window_size，窗口内存上界（64×4MiB）不因后端超发失守（R-A5）。
+    let mut st = WindowState::new(4096);
+    let fetch =
+        move |_anchor: u64, _len: u32| Box::pin(async { Ok(vec![b'o'; 8192]) }) as FetchFuture;
+    let out = window::read_at(&mut st, 0, 100, fetch).await.unwrap();
+    assert_eq!(out.len(), 100);
+    assert_eq!(
+        st.window.as_ref().unwrap().data.len(),
+        4096,
+        "stored window data clamped to window_size"
+    );
+}
+
+#[tokio::test]
 async fn unknown_size_terminates_on_empty_fetch() {
     // size=None，fetch 返回空 → 短读返回已填字节
     let mut st = WindowState::new(window::DEFAULT_READ_WINDOW);

@@ -259,7 +259,11 @@ impl HandleTable {
         let file = files
             .get_mut(&fh)
             .ok_or_else(|| BackendError::NotFound("Invalid file handle".into()))?;
-        file.window.size = known_size;
+        // attr 缓存 miss（known=None）不降级句柄已知的 size——EOF 钳制
+        // 只能收紧不能失忆（R-A3）。
+        if let Some(k) = known_size {
+            file.window.size = Some(k);
+        }
         read_at(&mut file.window, offset, size, fetch).await
     }
 }

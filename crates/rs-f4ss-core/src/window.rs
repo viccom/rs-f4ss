@@ -66,10 +66,14 @@ where
             if let Some(sz) = state.size {
                 len = len.min(sz - pos); // 开窗即钳到 EOF
             }
-            let data = fetch(pos, len as u32).await?;
+            let mut data = fetch(pos, len as u32).await?;
             if data.is_empty() {
                 // 后端在 EOF 之下给了空窗：短读优于在 dispatcher 线程上自旋
                 break;
+            }
+            // 病态后端超发时截断到 window_size，窗口内存上界不失守（R-A5）。
+            if data.len() > state.window_size {
+                data.truncate(state.window_size);
             }
             state.window = Some(ReadWindow { start: pos, data });
         }
