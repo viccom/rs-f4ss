@@ -1051,7 +1051,6 @@ pub fn mount_windows<B: StorageBackend + 'static>(
         }
         if stop_requested.load(Ordering::Acquire) {
             tracing::info!("Stop requested, shutting down host...");
-            adapter_arc.abort_all_prefetch();
             host.stop();
             host.unmount();
             break;

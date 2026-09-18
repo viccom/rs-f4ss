@@ -119,7 +119,6 @@ impl<B: StorageBackend> Filesystem for FuseAdapter<B> {
                 }
             }
         }
-        self.abort_all_prefetch();
     }
 
     fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {

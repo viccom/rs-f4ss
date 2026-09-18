@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,7 +22,6 @@ use crate::cache::{CacheLayer, CachedAttr, CachedChildren};
 use crate::error::{BackendError, MountError};
 use crate::handle::{HandleTable, WriteAtError};
 use crate::inode::InodeMap;
-use crate::prefetch::BandwidthEstimator;
 
 // ---------------------------------------------------------------------------
 // MountEvent
@@ -67,16 +65,6 @@ pub enum MountEvent {
 // FuseAdapter — platform-agnostic core
 // ---------------------------------------------------------------------------
 
-/// A pending background prefetch task.
-/// Uses Arc<Mutex> shared state instead of block_on() to avoid
-/// nested runtime panic when called from within an existing block_on() context
-/// (e.g., WinFsp callback → block_on(read()) → try_collect_prefetch()).
-#[allow(clippy::type_complexity)]
-struct PrefetchSlot {
-    result: Arc<std::sync::Mutex<Option<(u64, Vec<u8>)>>>,
-    _handle: tokio::task::JoinHandle<()>,
-}
-
 pub struct FuseAdapter<B: StorageBackend> {
     pub(crate) backend: Arc<B>,
     pub(crate) cache: CacheLayer,
@@ -93,8 +81,6 @@ pub struct FuseAdapter<B: StorageBackend> {
     pub(crate) mount_gid: u32,
     event_tx: broadcast::Sender<MountEvent>,
     pub(crate) rt: tokio::runtime::Runtime,
-    bandwidth: std::sync::Mutex<BandwidthEstimator>,
-    prefetch: std::sync::Mutex<HashMap<u64, PrefetchSlot>>,
 }
 
 impl<B: StorageBackend> FuseAdapter<B> {
@@ -115,8 +101,6 @@ impl<B: StorageBackend> FuseAdapter<B> {
             mount_gid: config.mount_gid,
             event_tx,
             rt,
-            bandwidth: std::sync::Mutex::new(BandwidthEstimator::new()),
-            prefetch: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -133,132 +117,7 @@ impl<B: StorageBackend> FuseAdapter<B> {
         self.rt.block_on(f)
     }
 
-    /// Non-blocking check for completed prefetch. Returns Some(data) if the
-    /// prefetch finished and covers the requested range. If not ready yet,
-    /// the slot is kept for a future check.
-    fn try_collect_prefetch(&self, fh: u64, offset: u64, size: u32) -> Option<Vec<u8>> {
-        let slot = {
-            let mut slots = recover_lock(self.prefetch.lock());
-            slots.remove(&fh)?
-        };
-
-        // Non-blocking: check if the prefetch task wrote its result
-        // Use mem::take to take ownership instead of cloning up to 16 MB.
-        let mut guard = recover_lock(slot.result.lock());
-        match std::mem::take(&mut *guard) {
-            Some((prefetch_offset, data)) if !data.is_empty() => {
-                drop(guard); // release lock before writing to read_cache
-                tracing::debug!(
-                    "[prefetch] collected {} bytes at offset {prefetch_offset} for fh={fh}",
-                    data.len(),
-                );
-                self.handles.set_read_cache(fh, data, prefetch_offset);
-                self.handles.read_from_cache(fh, offset, size)
-            }
-            Some(_) => None, // completed but empty — discard slot
-            None => {
-                // Not ready yet — put slot back
-                drop(guard);
-                recover_lock(self.prefetch.lock()).insert(fh, slot);
-                None
-            }
-        }
-    }
-
-    /// If sequential access is detected and current cache is past 50%, spawn
-    /// a background task to fetch the next chunk.
-    fn maybe_spawn_prefetch(&self, fh: u64, path: &str) {
-        let cache_info = match self.handles.get_cache_info(fh) {
-            Some(info) => info,
-            None => return,
-        };
-        let (cache_start, cache_len) = cache_info;
-        if cache_len == 0 {
-            return;
-        }
-
-        // Check consumption threshold (past 50% of cache)
-        let (last_read_end, is_seq) = match self.handles.get_read_state(fh) {
-            Some(state) => state,
-            None => return,
-        };
-        if !is_seq {
-            return;
-        }
-
-        let consumed = last_read_end.saturating_sub(cache_start);
-        if consumed < (cache_len as u64 * 5) / 10 {
-            return;
-        }
-
-        // Don't double-prefetch
-        {
-            let slots = recover_lock(self.prefetch.lock());
-            if slots.contains_key(&fh) {
-                return;
-            }
-        }
-
-        let next_offset = cache_start + cache_len as u64;
-        let bw = recover_lock(self.bandwidth.lock());
-        let prefetch_size = bw.prefetch_size(5.0, u64::MAX);
-        drop(bw);
-
-        let backend = self.backend.clone();
-        let path_owned = path.to_string();
-
-        tracing::debug!("[prefetch] spawning: fh={fh} offset={next_offset} size={prefetch_size}");
-
-        let result = Arc::new(std::sync::Mutex::new(None));
-        let result_clone = result.clone();
-
-        let _handle = self.rt.spawn(async move {
-            let read_future = backend.read(&path_owned, next_offset, prefetch_size);
-            let prefetch_result =
-                match tokio::time::timeout(std::time::Duration::from_secs(60), read_future).await {
-                    Ok(Ok(data)) if !data.is_empty() => Some((next_offset, data)),
-                    Ok(Ok(_)) => {
-                        tracing::debug!(
-                            "[prefetch] empty response for {path_owned} at {next_offset}"
-                        );
-                        None
-                    }
-                    Ok(Err(e)) => {
-                        tracing::debug!("[prefetch] failed for {path_owned} at {next_offset}: {e}");
-                        None
-                    }
-                    Err(_) => {
-                        tracing::debug!("[prefetch] timed out for {path_owned} at {next_offset}");
-                        None
-                    }
-                };
-            *recover_lock(result_clone.lock()) = prefetch_result;
-        });
-
-        recover_lock(self.prefetch.lock()).insert(fh, PrefetchSlot { result, _handle });
-    }
-
-    /// Abort any pending prefetch for a file handle.
-    fn abort_prefetch(&self, fh: u64) {
-        if let Some(slot) = recover_lock(self.prefetch.lock()).remove(&fh) {
-            slot._handle.abort();
-        }
-    }
-
-    /// Abort all pending prefetch tasks. Called during shutdown.
-    pub fn abort_all_prefetch(&self) {
-        let mut slots = recover_lock(self.prefetch.lock());
-        let count = slots.len();
-        for (_, slot) in slots.drain() {
-            slot._handle.abort();
-        }
-        if count > 0 {
-            tracing::info!("Aborted {count} pending prefetch task(s)");
-        }
-    }
-
     pub fn discard_handle(&self, fh: u64) {
-        self.abort_prefetch(fh);
         let _ = self.handles.remove(fh);
     }
 
@@ -340,75 +199,37 @@ impl<B: StorageBackend> FuseAdapter<B> {
             return Ok(data);
         }
 
-        let is_sequential = self.handles.update_read_pattern(fh, offset, size);
-        let is_first = self.handles.is_first_read(fh);
+        // 1. 取已知大小（moka 命中零网络；与旧 prefetch 分支同频调用，
+        //    服务端变化可见性与现状一致）
+        let known = self
+            .cache
+            .get_attr(&path)
+            .await
+            .map(|c| c.entry.size)
+            .filter(|s| *s > 0);
 
-        // 1. Try per-handle read cache
-        if let Some(cached) = self.handles.read_from_cache(fh, offset, size) {
-            self.maybe_spawn_prefetch(fh, &path);
-            return Ok(cached);
-        }
-
-        // 2. Check if a background prefetch completed
-        if let Some(result) = self.try_collect_prefetch(fh, offset, size) {
-            return Ok(result);
-        }
-
-        // 3. Cache miss — adaptive fetch
-        let fetch_size = if is_first && size <= 256 * 1024 {
-            // Quick first response: small initial reads (e.g. PotPlayer header probe)
-            // don't prefetch — respond immediately to avoid timeout errors.
-            size
-        } else {
-            let pipeline_secs = if is_sequential { 5.0 } else { 2.0 };
-            let file_size = self
-                .cache
-                .get_attr(&path)
-                .await
-                .map(|c| c.entry.size)
-                .unwrap_or(0);
-            let remaining = if file_size > offset {
-                file_size - offset
-            } else {
-                u64::MAX // Unknown size: don't constrain prefetch
-            };
-            recover_lock(self.bandwidth.lock())
-                .prefetch_size(pipeline_secs, remaining)
-                .max(size)
-        };
-
+        // 2. 窗口读。HandleTable::read_window 内部持写锁跨 await：
+        //    句柄内读串行（cydrive K41 同语义），锁不外泄。
         let start = std::time::Instant::now();
-        let data = self.backend.read(&path, offset, fetch_size).await?;
+        let backend = self.backend.clone();
+        let fetch_path: Arc<str> = path.clone();
+        let data = self
+            .handles
+            .read_window(fh, known, offset, size, move |anchor, len| {
+                let backend = backend.clone();
+                let fetch_path = fetch_path.clone();
+                async move { backend.read(&fetch_path, anchor, len).await }
+            })
+            .await
+            .map_err(MountError::Backend)?;
+
         let elapsed = start.elapsed();
-
-        // Record bandwidth observation
-        if !data.is_empty() {
-            recover_lock(self.bandwidth.lock()).observe(data.len() as u64, elapsed);
-        }
-
-        // Split data: full prefetch goes to cache, caller gets only requested slice.
-        // Avoids cloning the full prefetch when caller needs less (common for sequential reads).
-        let result = if data.len() > size as usize {
-            let result = data[..size as usize].to_vec();
-            self.handles.set_read_cache(fh, data, offset);
-            result
-        } else {
-            let result = data;
-            self.handles.set_read_cache(fh, result.clone(), offset);
-            result
-        };
-
-        // If sequential, start background prefetch for the next chunk
-        if is_sequential {
-            self.maybe_spawn_prefetch(fh, &path);
-        }
-
         self.emit(MountEvent::FileRead {
             path: (&*path).into(),
-            bytes: result.len() as u64,
+            bytes: data.len() as u64,
             duration_ms: elapsed.as_millis() as u64,
         });
-        Ok(result)
+        Ok(data)
     }
 
     pub async fn write(&self, fh: u64, offset: u64, data: &[u8]) -> Result<(), MountError> {
@@ -452,7 +273,6 @@ impl<B: StorageBackend> FuseAdapter<B> {
     }
 
     pub async fn release(&self, fh: u64) -> Result<(), MountError> {
-        self.abort_prefetch(fh);
         let open_file = self.handles.remove(fh);
         if let Some(file) = open_file {
             if file.dirty {
@@ -618,6 +438,7 @@ pub(crate) struct MockBackend {
     pub entries: std::sync::Mutex<Vec<Entry>>,
     content: std::sync::Mutex<Vec<(String, Vec<u8>)>>,
     write_fails: std::sync::Mutex<bool>,
+    read_calls: std::sync::Mutex<Vec<(String, u64, u32)>>,
 }
 
 #[cfg(test)]
@@ -627,7 +448,13 @@ impl MockBackend {
             entries: std::sync::Mutex::new(Vec::new()),
             content: std::sync::Mutex::new(Vec::new()),
             write_fails: std::sync::Mutex::new(false),
+            read_calls: std::sync::Mutex::new(Vec::new()),
         }
+    }
+
+    /// Every read() the backend has served: (path, offset, size).
+    pub fn read_calls(&self) -> Vec<(String, u64, u32)> {
+        recover_lock(self.read_calls.lock()).clone()
     }
 
     pub fn set_write_fails(&self, v: bool) {
@@ -699,6 +526,7 @@ impl StorageBackend for MockBackend {
     }
 
     async fn read(&self, path: &str, offset: u64, size: u32) -> Result<Vec<u8>, BackendError> {
+        recover_lock(self.read_calls.lock()).push((path.to_string(), offset, size));
         let content = recover_lock(self.content.lock());
         let data = content
             .iter()
@@ -894,6 +722,78 @@ mod tests {
         let adapter = FuseAdapter::new(backend, &make_config());
         let result = adapter.rt.block_on(adapter.read(9999, 0, 10));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn read_past_known_eof_makes_no_backend_request() {
+        let backend = MockBackend::new();
+        backend.add_file("/f.bin", "f.bin", 100, &[7u8; 100]);
+        let adapter = FuseAdapter::new(backend, &make_config());
+        let rt = &adapter.rt;
+
+        // Prime the attr cache so the read path knows the file size.
+        rt.block_on(adapter.getattr("/f.bin")).unwrap();
+        let fh = rt.block_on(adapter.open("/f.bin", false)).unwrap();
+        let _ = rt.block_on(adapter.read(fh, 0, 10)).unwrap();
+        let calls_before = adapter.backend.as_ref().read_calls().len();
+        let out = rt.block_on(adapter.read(fh, 100, 4096)).unwrap(); // offset == size
+        assert!(out.is_empty());
+        assert_eq!(adapter.backend.as_ref().read_calls().len(), calls_before, "no request at EOF");
+        let out2 = rt.block_on(adapter.read(fh, 500, 16)).unwrap();
+        assert!(out2.is_empty());
+        assert_eq!(
+            adapter.backend.as_ref().read_calls().len(),
+            calls_before,
+            "no request past EOF"
+        );
+        rt.block_on(adapter.release(fh)).unwrap();
+    }
+
+    #[test]
+    fn repeated_reads_within_window_do_not_refetch() {
+        // 4 KiB 文件读 3 次（0..10, 10..20, 20..30）→ backend read_calls == 1
+        let backend = MockBackend::new();
+        backend.add_file("/f.bin", "f.bin", 4096, &vec![7u8; 4096]);
+        let adapter = FuseAdapter::new(backend, &make_config());
+        let rt = &adapter.rt;
+
+        rt.block_on(adapter.getattr("/f.bin")).unwrap();
+        let fh = rt.block_on(adapter.open("/f.bin", false)).unwrap();
+        let a = rt.block_on(adapter.read(fh, 0, 10)).unwrap();
+        let b = rt.block_on(adapter.read(fh, 10, 10)).unwrap();
+        let c = rt.block_on(adapter.read(fh, 20, 10)).unwrap();
+        assert_eq!(a.len(), 10);
+        assert_eq!(b.len(), 10);
+        assert_eq!(c.len(), 10);
+        assert_eq!(
+            adapter.backend.as_ref().read_calls().len(),
+            1,
+            "3 reads within one window = 1 fetch"
+        );
+        rt.block_on(adapter.release(fh)).unwrap();
+    }
+
+    #[test]
+    fn random_seek_reads_anchor_new_window_each_miss() {
+        // 三个远距离 offset 各读 4 KiB → 3 次 fetch，且 anchor 分别等于请求 offset
+        const MIB: u64 = 1024 * 1024;
+        let backend = MockBackend::new();
+        backend.add_file("/seek.bin", "seek.bin", 24 * MIB, &vec![7u8; 24 * 1024 * 1024]);
+        let adapter = FuseAdapter::new(backend, &make_config());
+        let rt = &adapter.rt;
+
+        rt.block_on(adapter.getattr("/seek.bin")).unwrap();
+        let fh = rt.block_on(adapter.open("/seek.bin", false)).unwrap();
+        for off in [0, 8 * MIB, 16 * MIB] {
+            let out = rt.block_on(adapter.read(fh, off, 4096)).unwrap();
+            assert_eq!(out.len(), 4096);
+        }
+        let calls = adapter.backend.as_ref().read_calls();
+        assert_eq!(calls.len(), 3, "each distant seek fetches a fresh window");
+        assert_eq!(calls[0].1, 0);
+        assert_eq!(calls[1].1, 8 * MIB);
+        assert_eq!(calls[2].1, 16 * MIB);
+        rt.block_on(adapter.release(fh)).unwrap();
     }
 
     #[test]
