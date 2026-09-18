@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use crate::error::BackendError;
-use crate::window::{read_at, WindowState, DEFAULT_READ_WINDOW};
+use crate::window::{read_at, ReadWindow, WindowState, DEFAULT_READ_WINDOW};
 
 pub const MAX_BUFFER_SIZE: usize = 2 * 1024 * 1024 * 1024; // 2 GiB
 
@@ -227,6 +227,15 @@ impl HandleTable {
     /// Remove a file handle, returning its state (for release).
     pub fn remove(&self, fh: u64) -> Option<OpenFile> {
         self.write_table().remove(&fh)
+    }
+
+    /// Adopt a grace-parked window into a freshly opened read handle
+    /// (mount open wiring); the handle's window state is otherwise fresh.
+    pub fn adopt_window(&self, fh: u64, w: ReadWindow) {
+        let mut files = self.write_table();
+        if let Some(file) = files.get_mut(&fh) {
+            file.window.window = Some(w);
+        }
     }
 
     /// Serve a read through the handle's anchored window. The table write

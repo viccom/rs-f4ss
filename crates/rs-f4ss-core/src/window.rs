@@ -84,3 +84,68 @@ where
     }
     Ok(out)
 }
+
+/// 关闭句柄的读窗口停车表（cydrive K41 / rclone --vfs-handle-caching 5s）。
+/// 治"播放器/资源管理器关了立刻重开"的抖动。带 size 见证：停车后服务端
+/// 换过内容（大小变化）即弃用。
+pub struct GraceTable {
+    entries: std::collections::HashMap<String, (std::time::Instant, u64, ReadWindow)>,
+    ttl: std::time::Duration,
+    capacity: usize,
+}
+
+pub const DEFAULT_GRACE_TTL: std::time::Duration = std::time::Duration::from_secs(5);
+pub const DEFAULT_GRACE_CAPACITY: usize = 64; // 容量×窗口 = 256 MiB 上界
+
+impl GraceTable {
+    pub fn new(capacity: usize, ttl: std::time::Duration) -> Self {
+        Self {
+            entries: std::collections::HashMap::new(),
+            ttl,
+            capacity,
+        }
+    }
+
+    /// 停车。超过容量先扫过期，仍满则挤掉最旧。
+    pub fn park(&mut self, path: &str, w: ReadWindow, size: u64, now: std::time::Instant) {
+        if self.capacity == 0 {
+            return;
+        }
+        if self.entries.len() >= self.capacity {
+            let ttl = self.ttl;
+            self.entries
+                .retain(|_, (parked, _, _)| now.duration_since(*parked) < ttl);
+            if self.entries.len() >= self.capacity {
+                if let Some(oldest) = self
+                    .entries
+                    .iter()
+                    .min_by_key(|(_, (parked, _, _))| *parked)
+                    .map(|(k, _)| k.clone())
+                {
+                    self.entries.remove(&oldest);
+                }
+            }
+        }
+        self.entries.insert(path.to_string(), (now, size, w));
+    }
+
+    /// 取车：条目新鲜且 size 见证一致才复用（取出即移除）。
+    pub fn take(
+        &mut self,
+        path: &str,
+        current_size: u64,
+        now: std::time::Instant,
+    ) -> Option<ReadWindow> {
+        let (parked, size, w) = self.entries.remove(path)?;
+        if now.duration_since(parked) < self.ttl && size == current_size {
+            Some(w)
+        } else {
+            None
+        }
+    }
+
+    /// open 接线的 cold-path 检查：是否有该 path 的停车条目。
+    pub fn contains_key(&self, path: &str) -> bool {
+        self.entries.contains_key(path)
+    }
+}

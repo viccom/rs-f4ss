@@ -123,3 +123,86 @@ async fn window_anchors_at_requested_offset() {
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].0, 999_999, "window anchors at requested offset");
 }
+
+// ── GraceTable（句柄宽限停车表）──
+
+#[test]
+fn grace_take_expired_entry_is_rejected() {
+    let mut g = window::GraceTable::new(64, std::time::Duration::from_secs(5));
+    let now = std::time::Instant::now();
+    g.park(
+        "/a",
+        window::ReadWindow {
+            start: 0,
+            data: vec![1, 2, 3],
+        },
+        3,
+        now,
+    );
+    assert!(g
+        .take("/a", 3, now + std::time::Duration::from_secs(2))
+        .is_some());
+    g.park(
+        "/a",
+        window::ReadWindow {
+            start: 0,
+            data: vec![1],
+        },
+        3,
+        now,
+    );
+    assert!(
+        g.take("/a", 3, now + std::time::Duration::from_secs(6))
+            .is_none(),
+        "expired"
+    );
+}
+
+#[test]
+fn grace_take_rejects_size_mismatch() {
+    // 停车时 size=3，取车时当前 size=9（服务端换过内容）→ 不复用
+    let mut g = window::GraceTable::new(64, std::time::Duration::from_secs(5));
+    let now = std::time::Instant::now();
+    g.park(
+        "/a",
+        window::ReadWindow {
+            start: 0,
+            data: vec![1, 2, 3],
+        },
+        3,
+        now,
+    );
+    assert!(
+        g.take("/a", 9, now + std::time::Duration::from_secs(1))
+            .is_none(),
+        "size witness mismatch must reject reuse"
+    );
+}
+
+#[test]
+fn grace_park_evicts_beyond_capacity() {
+    // park 65 条 → 第 1 条被挤出（每条停车时刻递增，最旧者确定）
+    let mut g = window::GraceTable::new(64, std::time::Duration::from_secs(5));
+    let now = std::time::Instant::now();
+    for i in 0..65u64 {
+        g.park(
+            &format!("/f{i}"),
+            window::ReadWindow {
+                start: 0,
+                data: vec![7u8; 16],
+            },
+            16,
+            now + std::time::Duration::from_millis(i),
+        );
+    }
+    assert!(
+        g.take("/f0", 16, now + std::time::Duration::from_secs(1))
+            .is_none(),
+        "first parked entry evicted beyond capacity"
+    );
+    assert!(
+        g.take("/f64", 16, now + std::time::Duration::from_secs(1))
+            .is_some(),
+        "last parked entry retained"
+    );
+}

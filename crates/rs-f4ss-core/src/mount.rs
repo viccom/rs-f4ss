@@ -22,6 +22,7 @@ use crate::cache::{CacheLayer, CachedAttr, CachedChildren};
 use crate::error::{BackendError, MountError};
 use crate::handle::{HandleTable, WriteAtError};
 use crate::inode::InodeMap;
+use crate::window;
 
 // ---------------------------------------------------------------------------
 // MountEvent
@@ -79,6 +80,8 @@ pub struct FuseAdapter<B: StorageBackend> {
     pub(crate) mount_uid: u32,
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) mount_gid: u32,
+    /// 关闭句柄的读窗口停车表（D4：5s/64 条/size 见证）。
+    grace: std::sync::Mutex<window::GraceTable>,
     event_tx: broadcast::Sender<MountEvent>,
     pub(crate) rt: tokio::runtime::Runtime,
 }
@@ -99,6 +102,10 @@ impl<B: StorageBackend> FuseAdapter<B> {
             read_only: config.read_only,
             mount_uid: config.mount_uid,
             mount_gid: config.mount_gid,
+            grace: std::sync::Mutex::new(window::GraceTable::new(
+                window::DEFAULT_GRACE_CAPACITY,
+                window::DEFAULT_GRACE_TTL,
+            )),
             event_tx,
             rt,
         }
@@ -186,7 +193,23 @@ impl<B: StorageBackend> FuseAdapter<B> {
         if write && self.read_only {
             return Err(MountError::Backend(BackendError::ReadOnly));
         }
-        Ok(self.handles.allocate(path.to_string()))
+        let fh = self.handles.allocate(path.to_string());
+        // 宽限表接线（D4）：仅当 grace 有该 path 条目时才查 attr 做 size
+        // 见证（cold path 零开销）；见证一致且新鲜则复用停车窗口。
+        if !write && recover_lock(self.grace.lock()).contains_key(path) {
+            let cur = self
+                .cache
+                .get_attr(path)
+                .await
+                .map(|c| c.entry.size)
+                .unwrap_or(0);
+            if let Some(w) =
+                recover_lock(self.grace.lock()).take(path, cur, std::time::Instant::now())
+            {
+                self.handles.adopt_window(fh, w);
+            }
+        }
+        Ok(fh)
     }
 
     pub async fn read(&self, fh: u64, offset: u64, size: u32) -> Result<Vec<u8>, MountError> {
@@ -274,7 +297,7 @@ impl<B: StorageBackend> FuseAdapter<B> {
 
     pub async fn release(&self, fh: u64) -> Result<(), MountError> {
         let open_file = self.handles.remove(fh);
-        if let Some(file) = open_file {
+        if let Some(mut file) = open_file {
             if file.dirty {
                 if let Err(e) = self.backend.write(&file.path, &file.buffer).await {
                     tracing::error!(
@@ -286,6 +309,15 @@ impl<B: StorageBackend> FuseAdapter<B> {
                 }
                 self.cache.invalidate(&file.path).await;
                 self.cache.invalidate_parent(&file.path).await;
+            } else if let Some(w) = file.window.window.take() {
+                // 非 dirty 且窗口非空 → 停车，宽限期内重开可复用（D4）。
+                // size 见证 = 关闭时已知的文件大小。
+                recover_lock(self.grace.lock()).park(
+                    &file.path,
+                    w,
+                    file.window.size.unwrap_or(0),
+                    std::time::Instant::now(),
+                );
             }
         }
         Ok(())
@@ -794,6 +826,58 @@ mod tests {
         assert_eq!(calls[1].1, 8 * MIB);
         assert_eq!(calls[2].1, 16 * MIB);
         rt.block_on(adapter.release(fh)).unwrap();
+    }
+
+    #[test]
+    fn close_then_reopen_within_grace_reuses_window() {
+        let backend = MockBackend::new();
+        backend.add_file("/f.bin", "f.bin", 8192, &[9u8; 8192]);
+        let adapter = FuseAdapter::new(backend, &make_config());
+        let rt = &adapter.rt;
+
+        // Prime the attr cache: the read path needs the size for window
+        // clamping and the reopen path needs it as the size witness.
+        rt.block_on(adapter.getattr("/f.bin")).unwrap();
+        let fh1 = rt.block_on(adapter.open("/f.bin", false)).unwrap();
+        let _ = rt.block_on(adapter.read(fh1, 0, 4096)).unwrap();
+        rt.block_on(adapter.release(fh1)).unwrap();
+        let fh2 = rt.block_on(adapter.open("/f.bin", false)).unwrap();
+        let out = rt.block_on(adapter.read(fh2, 0, 4096)).unwrap();
+        assert_eq!(out.len(), 4096);
+        assert_eq!(
+            adapter.backend.as_ref().read_calls().len(),
+            1,
+            "second open served from grace window"
+        );
+        rt.block_on(adapter.release(fh2)).unwrap();
+    }
+
+    #[test]
+    fn dirty_close_is_not_parked() {
+        // 写脏后 release → 重开读 → 必须重新 fetch（read_calls 增加）
+        let backend = MockBackend::new();
+        backend.add_file("/f.bin", "f.bin", 8192, &[9u8; 8192]);
+        let adapter = FuseAdapter::new(backend, &make_config());
+        let rt = &adapter.rt;
+
+        rt.block_on(adapter.getattr("/f.bin")).unwrap();
+        let fh1 = rt.block_on(adapter.open("/f.bin", false)).unwrap();
+        let _ = rt.block_on(adapter.read(fh1, 0, 4096)).unwrap();
+        let calls_before = adapter.backend.as_ref().read_calls().len();
+
+        // Dirty the handle (this also invalidates its window), then release:
+        // the dirty write-back path must not park a grace window.
+        rt.block_on(adapter.write(fh1, 0, &vec![8u8; 8192])).unwrap();
+        rt.block_on(adapter.release(fh1)).unwrap();
+
+        let fh2 = rt.block_on(adapter.open("/f.bin", false)).unwrap();
+        let out = rt.block_on(adapter.read(fh2, 0, 4096)).unwrap();
+        assert_eq!(out, vec![8u8; 4096]);
+        assert!(
+            adapter.backend.as_ref().read_calls().len() > calls_before,
+            "dirty close must not be parked: reopen refetches"
+        );
+        rt.block_on(adapter.release(fh2)).unwrap();
     }
 
     #[test]
