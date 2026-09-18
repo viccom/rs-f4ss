@@ -38,7 +38,7 @@ jobs:
             binary: rs-f4ss-desktop
             package: rs-f4ss-desktop
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install FUSE + Tauri/GTK system dependencies
@@ -103,7 +103,7 @@ jobs:
             binary: rs-f4ss-desktop.exe
             package: rs-f4ss-desktop
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
