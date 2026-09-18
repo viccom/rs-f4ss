@@ -67,7 +67,7 @@ fuser.workspace = true
 libc = "0.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-winfsp = "0.12"
+winfsp = "0.13"
 winfsp-sys = "0.12"
 
 [dev-dependencies]
