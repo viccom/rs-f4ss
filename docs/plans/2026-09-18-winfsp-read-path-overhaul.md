@@ -865,8 +865,35 @@ cd /e/GitHub/rs-f4ss && git merge --no-ff feat/read-window-model
 
 | 日期 | 项目 | 基线 | 结果 |
 |------|------|------|------|
-| | 尾读 EOF-4MiB | ~5.4 s | |
-| | small.txt ×100 | 155-195 ms | |
-| | 顺序 256MiB 第 1/2 遍 | 209/211 MB/s | |
-| | e2e.ps1 | 51/51 ×3 | |
-| | WSL 三套 e2e | 51+55+40 | |
+| 2026-09-18 | 基线测试（Task 0） | 28+268+24 全绿 | 28+268+24 全绿 ✅（需 WinFsp SxS bin 在 PATH，见执行记录） |
+| 2026-09-18 | 尾读 EOF-4MiB（基线复测） | ~5.4 s | **5.53 s**（dufs 5 请求，416 回退存在） |
+| 2026-09-18 | small.txt ×100（基线复测） | 155-195 ms | 177.6 ms |
+| 2026-09-18 | 顺序 256MiB 第 1/2 遍（基线复测） | 209/211 MB/s | 120.4 / 202.3 MB/s |
+| 2026-09-18 | 尾读 EOF-4MiB（改造后） | **预期 <0.2 s** | **0.03 s** ✅（dufs 请求 5→1，185×） |
+| 2026-09-18 | small.txt ×100（改造后） | 显著下降 | **12.5 ms**（14×） |
+| 2026-09-18 | 顺序 256MiB 第 1/2 遍（改造后） | 回退 >20% 则调 16 MiB | **210.5 / 229.3 MB/s**（对基线复测 +75%/+13%，对 2026-09-17 历史基线 209/211 持平略升——无需调 16 MiB） |
+| 2026-09-18 | e2e.ps1 | 51/51 ×3 | **51/51 ×3** ✅ |
+| 2026-09-18 | Windows 全量门禁 | test+clippy 绿 | 28+275+10+24 全绿；clippy -D warnings 零警告 ✅ |
+| 2026-09-18 | WSL 三套 e2e | 51+55+40 | e2e.sh **51/51**、e2e-api.sh **55/55**、e2e-share.sh **40/40** ✅（Linux 全量测试 28+272+10+24 亦全绿；share 套件需 `--features serve,http` 构建，见执行记录） |
+| 2026-09-18 | fmt --all -- --check | 计划隐含期望绿 | **不绿（存量漂移）**：f9a3c77 基线即有 main.rs/webdav.rs/mount_windows.rs/persistence.rs/server/*/selfupdater 漂移；本计划引入的漂移（handle.rs/mount.rs/window_test.rs）已用 rustfmt 清零（commit cf5faa2）。存量漂移超出计划文件范围，未动，回滚/修复方式：未来一次 `cargo fmt --all` 全量重排。 |
+
+基线复测脚本：`C:\tmp\rsf4ss-perf\bench-window.ps1`（Task 7 复跑用同脚本同参数对比；结果文件 `C:\tmp\rsf4ss-perf\bench-window-model.txt`）。
+
+## 执行记录
+
+- 2026-09-18 / 环境发现 / 测试二进制 STATUS_DLL_NOT_FOUND：本机 WinFsp 装在 `C:\Program Files (x86)\WinFsp\SxS\sxs.20260509T155444Z\bin`（SxS 布局）且不在 PATH / 采纳方案：跑 cargo test/clippy 前先 `export PATH="/c/Program Files (x86)/WinFsp/SxS/sxs.20260509T155444Z/bin:$PATH"`；基准 exe 旁复制 winfsp-x64.dll / 理由：最小可逆的环境修正，不改仓库代码。
+- 2026-09-18 / Task 1 / 计划 Step 4 示例代码 `self.ranged_get(...)` 递归形状与注释「内联第二次请求，防无限递归」不一致，且 async 递归触发 E0733（需 Box::pin）/ 采纳方案：`ranged_get` 调 `ranged_get_once`（返回 `RangedRead::{Data, Unsatisfied}`），钳制重试为内联第二个 `ranged_get_once` 调用，第二次 416 一律按 EOF 空读——结构性限定至多 2 个请求 / 理由：满足注释硬约束（防无限递归），语义与 D1/D2 一致。
+- 2026-09-18 / Task 2 / 计划 Step 3 测试草稿 `expect_range(&req, 0, 4)` 与 helper 语义 (offset,size) 及该测试自身响应（Content-Range bytes 0-4/10、5 字节 body、断言 b"world"）矛盾 / 采纳方案：按 `expect_range(&req, 0, 5)` 转写（与计划响应/终断言对齐的更强约束，非放宽）/ 理由：字面转写会在实现正确后仍红。
+- 2026-09-18 / Task 2 / 计划草稿 `send_with_retry_timeout` 签名缺 body 参数，而「send_with_retry 变薄壳」要求透传请求体（PROPFIND/PUT 走此路径无单测，丢失是静默回归）/ 采纳方案：实现为 `(method, url, headers, body: Option<Bytes>, timeout)` 五参，webdav 调用点传 None / 理由：最小保守修复，语义不变。
+- 2026-09-18 / Task 2 附带发现 / 当前工具链 rustfmt 下仓库基线本就不干净（HEAD 的 webdav.rs 有 5 处 fmt 差异，mount_windows.rs/persistence.rs/server/* 亦有）/ 留待 Task 7 的 fmt --check 门禁单独决策并记录 / 理由：本任务不改计划外文件。
+- 2026-09-18 / Task 3 / 计划 Files 未列 webdav.rs，但 parse_unsatisfied_size 提升到 common.rs 需要改 webdav.rs 引用 / 采纳方案：webdav.rs 最小联动（删本地副本、改引用 common 版），commit body 注明 / 理由：计划内部一致性要求的必要例外。
+- 2026-09-18 / Task 3 / offset+size 溢出 u64 的退化算术臂（http.rs）/ 采纳方案：保留历史 read_full_and_slice 行为（非 416 回退路径，30s 超时有界）；原第 502 行附近的无条件整文件回退已随重写移除 / 理由：最可逆的保守选择，与 D1「416 一律不回退」不冲突。
+- 2026-09-18 / Task 4 / 计划伪代码与真实 API 多处不匹配（BackendError 实际在 crate::error；get_attr 返回 Option 非 Result；mount 测试惯用 block_on+make_config 而非 tokio::test+MountConfig::default()；attr 预热需显式 getattr——read 只查不写缓存；MockBackend 非 Clone 需 Arc）/ 采纳方案：按真实 API 最小适配转写，断言零改动 / 理由：编译必需，语义与计划一致。
+- 2026-09-18 / Task 4 / mount_windows.rs:1054 与 mount_linux.rs:122 各有一行 abort_all_prefetch 引用（计划 Files 的「仅当引用了被删 API」条款覆盖）/ 采纳方案：各删该一行 / 理由：最小清理。mount_linux.rs 在 Windows 上未编译，其正确性由 Task 7 WSL 全量闸门守护。
+- 2026-09-18 / Task 4 / HandleTable::read_window 持写锁跨 await 触发 clippy::await_holding_lock / 采纳方案：该方法上 #[allow] + 注释注明是计划裁定的契约（句柄内读串行）/ 理由：计划原文「持写锁跨 await：句柄内读串行（cydrive K41 同语义）」。
+- 2026-09-18 / Task 5 / GraceTable::park 加 capacity==0 早退守卫（计划骨架未提）/ 采纳方案：2 行守卫保证容量不变式 / 理由：防御性最小补充。
+- 2026-09-18 / Task 5 / 子代理为基线对照做过一次 git stash/pop：desktop gen schemas 的「M」系 autocrlf 行尾噪音，往返后消失，悬空 stash 提交与 HEAD diff 为 0 行 / 采纳方案：接受现状（无内容丢失）/ 理由：已核实零差异。
+- 2026-09-18 / Task 5 附带发现 / `common.rs:175 read_full_and_slice is never used` 警告仅在无 `http` feature 的 release 构建出现（HEAD 即有，Task 1/3 遗留；http.rs 的溢出臂仍调用它）/ 不动，记录在案 / 理由：非门禁失败（rustc dead_code 且仅特定 feature 组合），清理超出本任务文件范围。
+- 2026-09-18 / Task 7 / 计划验证命令未说明 e2e-share.sh 的构建前提 / 采纳方案：share 套件需 `cargo build --release --features serve,http -p rs-f4ss-cli` 后运行（默认 features 只有 webdav+api+selfupdate，先撞 serve 缺失再撞 http 缺失）/ 理由：构建配置问题非代码回归，补齐特性后 40/40。
+- 2026-09-18 / Task 7 / `cargo fmt --all -- --check` 在 f9a3c77 基线即不绿（main.rs/webdav.rs/mount_windows.rs/persistence.rs/server/*/selfupdater 存量漂移）/ 采纳方案：只 rustfmt 本计划引入漂移的三个文件（handle.rs/mount.rs/window_test.rs，基线时它们干净），存量漂移不动并在此记录 / 理由：全量 reformat 会触碰计划 Files 之外的文件，违反「只碰必须碰的」。
+- 2026-09-18 / Task 7 / WSL 克隆 worktree 直接失败（worktree .git 指针是 Windows 绝对路径）/ 采纳方案：从主仓库 `git clone --branch feat/read-window-model /mnt/e/GitHub/rs-f4ss` 克隆（分支引用在共享对象库）/ 理由：最小绕行。
