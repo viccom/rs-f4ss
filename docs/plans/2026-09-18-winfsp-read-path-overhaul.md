@@ -897,3 +897,25 @@ cd /e/GitHub/rs-f4ss && git merge --no-ff feat/read-window-model
 - 2026-09-18 / Task 7 / 计划验证命令未说明 e2e-share.sh 的构建前提 / 采纳方案：share 套件需 `cargo build --release --features serve,http -p rs-f4ss-cli` 后运行（默认 features 只有 webdav+api+selfupdate，先撞 serve 缺失再撞 http 缺失）/ 理由：构建配置问题非代码回归，补齐特性后 40/40。
 - 2026-09-18 / Task 7 / `cargo fmt --all -- --check` 在 f9a3c77 基线即不绿（main.rs/webdav.rs/mount_windows.rs/persistence.rs/server/*/selfupdater 存量漂移）/ 采纳方案：只 rustfmt 本计划引入漂移的三个文件（handle.rs/mount.rs/window_test.rs，基线时它们干净），存量漂移不动并在此记录 / 理由：全量 reformat 会触碰计划 Files 之外的文件，违反「只碰必须碰的」。
 - 2026-09-18 / Task 7 / WSL 克隆 worktree 直接失败（worktree .git 指针是 Windows 绝对路径）/ 采纳方案：从主仓库 `git clone --branch feat/read-window-model /mnt/e/GitHub/rs-f4ss` 克隆（分支引用在共享对象库）/ 理由：最小绕行。
+
+## 深度审查记录（2026-09-18，合并后、push 前）
+
+两路并行深审（挂载层并发/稳定性 + 后端语义/异常处理），主会话核实承重发现后分两批修复：
+
+**已修复（commit `29ed8f5` 后端加固 + `8d44e80` 挂载层）**：
+- R-B2 http 206 Content-Range 起偏移校验缺失（两后端防线对称化，共享 `content_range_start_matches`）
+- R-B3 webdav 200 回退流式 skip 无 64 MiB 上限（chunked 场景，与 http 对称化）
+- R-A2 Linux FUSE open 绕过宽限表（只停车永不取车 → 走挂载层统一 open，WSL 编译+e2e 验证）
+- R-A3 attr 缓存 miss 把已知 size 降级为 None（EOF 钳制静默失效）+ size==0 被误当未知
+- R-A4 双未知时 size 见证退化为 0==0（无见证复用旧窗口）→ 无见证不停车
+- R-A5 窗口数据未截断到 window_size（病态后端内存上界失守）
+- R-B1 前缀匹配陷阱经穷举验证结构性安全（`-` 哨兵），加钉子回归测试
+- R-B5 Content-Range 单位大小写/多空格宽容化（RFC 语义）；R-B4 第二次 416 加 warn 日志；R-B6 size==0 短路；R-B8 32 位回退先 drain；R-B9 过时 NOTE 注释；R-B11 webdav-only 构建 dead_code 消音
+
+**报请裁决（未修）**：
+- R-A1（高）read_window 持全表写锁跨 await：死/挂服务器上单次读（重试叠加最坏 ~20 分钟）阻塞整个挂载点所有文件操作（读写/开关/卸载）。计划裁定的"句柄内读串行"被实现成了"全表串行"。候选：缩锁粒度到单句柄 / fetch 期间放锁 / 接受并文档化。
+- R-B7（低）300s 超时 × 4 次重试叠加放大最坏阻塞（与 R-A1 复合）；候选：重试总预算或超时不重试。
+- R-B10（低）webdav/http 两份 ranged_get ~85% 重复是 R-B2/R-B3 漂移的根因；候选：抽公共参数化实现。
+- R-B12（低，存量）206 body 无大小上限缓冲（异常服务器前提下内存峰值）。
+
+**修复后验证**：Windows 全量 28+287+11+24 绿 + clippy 零警告；WSL 全量 28+284+11+24 绿 + 三套 e2e 51/55/40；Windows e2e.ps1 51/51；基准复核尾读 0.03s/1 请求、small×100 14ms、顺序 194/215 MB/s（无回退）。
