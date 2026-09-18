@@ -50,6 +50,169 @@ impl HttpBackend {
             _ => None,
         }
     }
+
+    /// Ranged GET for [offset, offset+size) with 416 EOF semantics.
+    ///
+    /// Same structure as WebDavBackend::ranged_get: a 416 whose
+    /// server-reported size still covers `offset` (dufs rejects an
+    /// out-of-bounds end instead of clipping it) is retried once with the
+    /// length clamped to that size. The retry is an inlined second
+    /// `ranged_get_once`, so at most two requests are ever issued — no
+    /// recursion, and never a full-download fallback on 416.
+    async fn ranged_get(
+        &self,
+        url: &str,
+        path: &str,
+        offset: u64,
+        size: u32,
+    ) -> Result<Vec<u8>, BackendError> {
+        let total = match self.ranged_get_once(url, path, offset, size).await? {
+            RangedRead::Data(data) => return Ok(data),
+            RangedRead::Unsatisfied { total } => total,
+        };
+        match total {
+            // End-overrun 416: clamp the length to the server-reported size.
+            Some(n) if offset < n => {
+                let clamped = ((n - offset).min(u64::from(size)) as u32).max(1);
+                match self.ranged_get_once(url, path, offset, clamped).await? {
+                    RangedRead::Data(data) => Ok(data),
+                    // A repeat 416 is answered as EOF, not retried again.
+                    RangedRead::Unsatisfied { .. } => Ok(Vec::new()),
+                }
+            }
+            // offset is at/past EOF, or the server reported no size.
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    /// One ranged GET attempt; a 416 is surfaced to the caller, not handled.
+    async fn ranged_get_once(
+        &self,
+        url: &str,
+        path: &str,
+        offset: u64,
+        size: u32,
+    ) -> Result<RangedRead, BackendError> {
+        let end_inclusive = offset
+            .checked_add(u64::from(size))
+            .and_then(|e| e.checked_sub(1));
+
+        let resp = match end_inclusive {
+            Some(end_inc) => {
+                let range = format!("bytes={offset}-{end_inc}");
+                self.http
+                    .send_with_retry(Method::GET, url, vec![("Range", range)], None)
+                    .await?
+            }
+            // offset+size overflows the Range grammar: keep the historic
+            // plain-GET fallback (bounded by the 30 s request timeout).
+            None => {
+                return self
+                    .http
+                    .read_full_and_slice(url, offset, size)
+                    .await
+                    .map(RangedRead::Data)
+            }
+        };
+
+        let status = resp.status().as_u16();
+
+        if status == 206 {
+            let data = resp
+                .bytes()
+                .await
+                .map(|b| b.to_vec())
+                .map_err(|e| BackendError::Internal(format!("Read: {e}")))?;
+            return Ok(RangedRead::Data(data));
+        }
+        if status == 404 {
+            super::common::drain_response(resp).await;
+            return Err(BackendError::NotFound(path.to_string()));
+        }
+        if status == 416 {
+            // Never fall back to a full download on 416: on a 1 GiB file that
+            // path was measured to cost two uncapped GETs (5.4 s stall). Per
+            // RFC the server reports the current size in
+            // `Content-Range: bytes */<size>`; drain so the connection pools.
+            let total = resp
+                .headers()
+                .get("content-range")
+                .and_then(|v| v.to_str().ok())
+                .and_then(super::common::parse_unsatisfied_size);
+            super::common::drain_response(resp).await;
+            return Ok(RangedRead::Unsatisfied { total });
+        }
+        if let Some(e) = Self::map_status(path, status) {
+            super::common::drain_response(resp).await;
+            return Err(e);
+        }
+        if !resp.status().is_success() {
+            super::common::drain_response(resp).await;
+            return Err(BackendError::Internal(format!("GET failed: {status}")));
+        }
+
+        // 200: the server ignored Range — stream past [0, offset) then take
+        // `size` bytes. The guard counts bytes actually skipped, so it holds
+        // whether or not Content-Length is present (chunked responses too).
+        const MAX_FALLBACK_SKIP: u64 = 64 * 1024 * 1024; // 64 MiB
+        let need = size as usize;
+        let skip = match usize::try_from(offset) {
+            Ok(s) => s,
+            Err(_) => return Ok(RangedRead::Data(Vec::new())),
+        };
+
+        use futures_util::StreamExt;
+        let mut stream = resp.bytes_stream();
+        let mut skipped = 0usize;
+        let mut buf = Vec::with_capacity(need);
+
+        while let Some(chunk_result) = stream.next().await {
+            let chunk =
+                chunk_result.map_err(|e| BackendError::Internal(format!("Stream read: {e}")))?;
+
+            let chunk_len = chunk.len();
+            if skipped < skip {
+                let skip_remaining = skip - skipped;
+                if chunk_len <= skip_remaining {
+                    skipped += chunk_len;
+                    if skipped as u64 > MAX_FALLBACK_SKIP {
+                        return Err(BackendError::NotSupported(
+                            "Range-ignoring server: fallback skip exceeded 64 MiB cap".into(),
+                        ));
+                    }
+                    continue;
+                }
+                // Partial skip: take the tail of this chunk
+                let useful_start = skip_remaining;
+                let useful = &chunk[useful_start..];
+                let take = useful.len().min(need - buf.len());
+                buf.extend_from_slice(&useful[..take]);
+                skipped += useful_start;
+                if skipped as u64 > MAX_FALLBACK_SKIP {
+                    return Err(BackendError::NotSupported(
+                        "Range-ignoring server: fallback skip exceeded 64 MiB cap".into(),
+                    ));
+                }
+            } else {
+                let take = chunk.len().min(need - buf.len());
+                buf.extend_from_slice(&chunk[..take]);
+            }
+
+            if buf.len() >= need {
+                // Drain remaining stream for connection pool reuse
+                while let Some(Ok(_)) = stream.next().await {}
+                break;
+            }
+        }
+
+        Ok(RangedRead::Data(buf))
+    }
+}
+
+/// Outcome of one ranged GET attempt; a 416 is surfaced, not handled.
+enum RangedRead {
+    Data(Vec<u8>),
+    Unsatisfied { total: Option<u64> },
 }
 
 // ---------------------------------------------------------------------------
@@ -452,54 +615,7 @@ impl StorageBackend for HttpBackend {
 
     async fn read(&self, path: &str, offset: u64, size: u32) -> Result<Vec<u8>, BackendError> {
         let url = self.http.build_url(path)?;
-
-        if let Some(end_inc) = offset
-            .checked_add(u64::from(size))
-            .and_then(|e| e.checked_sub(1))
-        {
-            let range = format!("bytes={offset}-{end_inc}");
-            let resp = self
-                .http
-                .send_with_retry(Method::GET, &url, vec![("Range", range)], None)
-                .await?;
-            let status = resp.status().as_u16();
-
-            if status == 206 {
-                return resp
-                    .bytes()
-                    .await
-                    .map(|b| b.to_vec())
-                    .map_err(|e| BackendError::Internal(format!("Read: {e}")));
-            }
-            if status == 404 {
-                return Err(BackendError::NotFound(path.to_string()));
-            }
-            if status == 416 {
-                drop(resp);
-                return self.http.read_full_and_slice(&url, offset, size).await;
-            }
-            if let Some(e) = Self::map_status(path, status) {
-                return Err(e);
-            }
-            if status == 200 {
-                let data = resp
-                    .bytes()
-                    .await
-                    .map(|b| b.to_vec())
-                    .map_err(|e| BackendError::Internal(format!("Read: {e}")))?;
-                let start = match usize::try_from(offset) {
-                    Ok(s) => s,
-                    Err(_) => return Ok(Vec::new()),
-                };
-                if start >= data.len() {
-                    return Ok(Vec::new());
-                }
-                let end = start.saturating_add(size as usize).min(data.len());
-                return Ok(data[start..end].to_vec());
-            }
-        }
-
-        self.http.read_full_and_slice(&url, offset, size).await
+        self.ranged_get(&url, path, offset, size).await
     }
 
     async fn write(&self, path: &str, data: &[u8]) -> Result<(), BackendError> {
@@ -837,5 +953,199 @@ mod tests {
         assert_eq!(decode_html_entities("x&quot;y&quot;z"), "x\"y\"z");
         assert_eq!(decode_html_entities("&#39;hello&#39;"), "'hello'");
         assert_eq!(decode_html_entities("plain"), "plain");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fake-server read-path tests
+//
+// Mirrors webdav.rs read_path_tests: `read()`'s 416 EOF/clamped-retry
+// semantics and the 200 fallback skip cap had no in-process regression net.
+// Follows the TcpListener template proven in backend/common.rs.
+// ---------------------------------------------------------------------------
+
+#[cfg(all(test, feature = "http"))]
+mod read_path_tests {
+    use super::*;
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// Read one HTTP request off the socket (headers only; bodies unused here).
+    fn read_http_request(stream: &mut std::net::TcpStream) -> std::io::Result<String> {
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 1024];
+        loop {
+            let n = stream.read(&mut chunk)?;
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                break;
+            }
+        }
+        Ok(String::from_utf8_lossy(&buf).to_string())
+    }
+
+    fn backend_for_http(addr: std::net::SocketAddr) -> HttpBackend {
+        HttpBackend::from_url(&format!("http://{addr}"), false, None, None).unwrap()
+    }
+
+    /// Assert the request carried a Range header with the expected bounds.
+    fn expect_range(req: &str, offset: u64, size: u32) {
+        let end = offset + size as u64 - 1;
+        let range = req
+            .lines()
+            .find(|l| l.to_ascii_lowercase().starts_with("range:"))
+            .unwrap_or_else(|| panic!("no Range header in request: {req}"));
+        assert!(
+            range.contains(&format!("bytes={offset}-{end}")),
+            "unexpected Range: {range}"
+        );
+    }
+
+    /// 416 with `Content-Range: bytes */50` for a read starting past that size:
+    /// EOF answer is an empty read — no fallback full download, and the server
+    /// must see exactly one request.
+    #[tokio::test]
+    async fn read_416_at_eof_returns_empty_without_fallback_download() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut requests = 0usize;
+            while let Ok((mut stream, _)) = listener.accept() {
+                requests += 1;
+                let req = read_http_request(&mut stream).unwrap();
+                if requests == 1 {
+                    expect_range(&req, 100, 5); // file is only 50 bytes
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 416 Range Not Satisfiable\r\n\
+                           Content-Range: bytes */50\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .unwrap();
+                    tx.send(()).unwrap();
+                } else {
+                    panic!("416 must not trigger a second request, got: {req}");
+                }
+            }
+        });
+        let backend = backend_for_http(addr);
+        let data = backend.read("/f.bin", 100, 5).await.unwrap();
+        assert!(data.is_empty());
+        rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    }
+
+    /// dufs-style end-overrun 416: file is 50 bytes, `bytes=40-99` is rejected
+    /// with `Content-Range: bytes */50` — the client must clamp the length to
+    /// the server-reported size and retry once with `bytes=40-49`.
+    #[tokio::test]
+    async fn read_416_end_overrun_retries_clamped_to_server_size() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut s1, _) = listener.accept().unwrap();
+            let r1 = read_http_request(&mut s1).unwrap();
+            assert!(r1.contains("bytes=40-99"), "first range: {r1}");
+            s1.write_all(
+                b"HTTP/1.1 416\r\nContent-Range: bytes */50\r\n\
+               Content-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .unwrap();
+            let (mut s2, _) = listener.accept().unwrap();
+            let r2 = read_http_request(&mut s2).unwrap();
+            assert!(r2.contains("bytes=40-49"), "clamped retry: {r2}");
+            s2.write_all(
+                b"HTTP/1.1 206 Partial Content\r\n\
+               Content-Range: bytes 40-49/50\r\nContent-Length: 10\r\nConnection: close\r\n\r\nABCDEFGHIJ",
+            )
+            .unwrap();
+        });
+        let backend = backend_for_http(addr);
+        let data = backend.read("/f.bin", 40, 60).await.unwrap();
+        assert_eq!(data, b"ABCDEFGHIJ");
+    }
+
+    /// 416 without a Content-Range header: the size can't be classified, so
+    /// the answer is EOF (empty read) — no fallback full download, and the
+    /// server must see exactly one request.
+    #[tokio::test]
+    async fn read_416_without_content_range_returns_empty() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut requests = 0usize;
+            while let Ok((mut stream, _)) = listener.accept() {
+                requests += 1;
+                let req = read_http_request(&mut stream).unwrap();
+                if requests == 1 {
+                    expect_range(&req, 60, 5);
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 416 Range Not Satisfiable\r\n\
+                           Content-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .unwrap();
+                    tx.send(()).unwrap();
+                } else {
+                    panic!(
+                        "416 without Content-Range must not trigger a second request, got: {req}"
+                    );
+                }
+            }
+        });
+        let backend = backend_for_http(addr);
+        let data = backend.read("/f.bin", 60, 5).await.unwrap();
+        assert!(data.is_empty());
+        rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    }
+
+    /// 200 (Range ignored) + chunked response (no Content-Length): the
+    /// streaming skip must refuse to skip past the 64 MiB cap. The fake
+    /// server keeps sending 1 MiB chunks; once the guard trips the client
+    /// disconnects and the server's writes start failing (expected).
+    #[tokio::test]
+    async fn read_200_fallback_skip_over_cap_is_error() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let req = read_http_request(&mut stream).unwrap();
+            expect_range(&req, 65 * 1024 * 1024, 4096);
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+            // 1 MiB chunks; 80 MiB total is safely past the 64 MiB skip cap.
+            let chunk = vec![b'x'; 1024 * 1024];
+            for _ in 0..80 {
+                if stream
+                    .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+                    .is_err()
+                {
+                    return; // client hung up: skip guard tripped
+                }
+                if stream.write_all(&chunk).is_err() {
+                    return;
+                }
+                if stream.write_all(b"\r\n").is_err() {
+                    return;
+                }
+            }
+        });
+        let backend = backend_for_http(addr);
+        let err = backend
+            .read("/f.bin", 65 * 1024 * 1024, 4096)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err}").contains("64 MiB"),
+            "expected skip-cap error, got: {err}"
+        );
     }
 }

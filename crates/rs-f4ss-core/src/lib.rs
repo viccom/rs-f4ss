@@ -4,7 +4,7 @@ pub mod error;
 pub mod handle;
 pub mod inode;
 pub mod mount;
-pub mod prefetch;
+pub mod window;
 
 #[cfg(target_os = "linux")]
 pub mod mount_linux;

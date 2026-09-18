@@ -57,8 +57,8 @@ peer-to-peer file sharing between rs-f4ss instances.
 - **HTTP static** backend (nginx autoindex, Caddy, Python http.server, ...)
 - **FUSE** on Linux, **WinFsp** on Windows — works with every standard tool (`cat`, `cp`, `mv`, `rm`, `find`, `git`, ...)
 - Read-write **and** read-only modes
-- HTTP Range-based chunked reads with full-download fallback
-- Adaptive prefetch (sequential-pattern detection + bandwidth estimation)
+- HTTP Range-based chunked reads, EOF-clamped (no full-download fallback)
+- 4 MiB anchored read window per handle + handle grace table (5 s / 64 entries) for close/reopen reuse
 - Tokio-backed async runtime, moka-based LRU cache (configurable TTL)
 - HTTP Basic Auth, custom headers, redirect-aware
 
@@ -197,7 +197,7 @@ FuseAdapter ────────┤                                         
 - **No `VirtualFs` trait** — Linux (inode) and Windows (path) are fundamentally different. Each platform directly calls `FuseAdapter`'s async methods.
 - **Sync→Async bridge** — `FuseAdapter` owns a private `tokio::Runtime`; FUSE/WinFsp callbacks call `self.block_on()`.
 - **Write buffering** — Writes accumulate in `HandleTable` (up to 2 GiB). Data uploads on `flush`/`release` (full PUT, no partial writes).
-- **Read strategy** — Dirty write buffer → per-handle read cache → prefetch → backend. Backend uses HTTP Range with full-download fallback.
+- **Read strategy** — Dirty write buffer → per-handle 4 MiB anchored window → backend. The window anchors at the requested offset, is fetched on demand (no speculative read-ahead), clamps EOF through every layer, and survives close/reopen via a handle grace table (5 s / 64 entries). Backend uses HTTP Range; 416 at EOF never falls back to a full-file download.
 - **cfg-gated deps** — `fuser` is Linux-only, `winfsp` is Windows-only. Core code compiles on all platforms.
 - **Feature flags** — `webdav` (default), `http`, `api`, `serve`. Pick exactly what you need.
 

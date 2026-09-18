@@ -991,19 +991,11 @@ pub fn mount_windows<B: StorageBackend + 'static>(
         .max_component_length(255)
         .case_preserved_names(true)
         .unicode_on_disk(true)
-        // FileInfoTimeout = 0xFFFFFFFF (infinite) enables the Windows Cache Manager.
-        // This is the single most impactful setting for network filesystem performance:
-        // - OS handles read-ahead and file data caching internally
-        // - PotPlayer's repeated open/close probes are served from OS cache
-        // - Sequential reads get OS-level prefetch instead of per-request callbacks
-        // Same pattern used by rclone mount, SSHFS-Win, and WinFsp samples.
-        //
-        // file_info_timeout must stay BOUNDED (5s): with u32::MAX the Cache
-        // Manager defers write-back indefinitely, and the cleanup-time
-        // flush-and-purge (below) can then drop its dirty pages before the
-        // write callback ever runs — data silently lost on overwrite. A
-        // 5s timeout forces the CM to flush on a short cycle, so writes
-        // reach the filesystem (and then the backend) reliably.
+        // 读性能策略（ADR-014）：内核数据缓存已弃用 —— file_info_timeout 保持
+        // 有界（5000ms，仅元数据缓存），读吞吐由用户态锚定窗口 + 句柄宽限表
+        // 负责（window.rs）。历史上 u32::MAX 启用过 CM 数据缓存，但与
+        // "cleanup 时整文件 PUT"的写模型冲突：CM 延迟写回导致脏页在 cleanup
+        // 清洗中被丢弃（e2e 44/51，2026-09-17 实测），故弃用。
         .file_info_timeout(5000)
         .dir_info_timeout(u32::MAX)
         .volume_info_timeout(u32::MAX)
@@ -1051,7 +1043,6 @@ pub fn mount_windows<B: StorageBackend + 'static>(
         }
         if stop_requested.load(Ordering::Acquire) {
             tracing::info!("Stop requested, shutting down host...");
-            adapter_arc.abort_all_prefetch();
             host.stop();
             host.unmount();
             break;

@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
-use crate::prefetch::ReadPattern;
+use crate::error::BackendError;
+use crate::window::{read_at, ReadWindow, WindowState, DEFAULT_READ_WINDOW};
 
 pub const MAX_BUFFER_SIZE: usize = 2 * 1024 * 1024 * 1024; // 2 GiB
 
@@ -18,11 +19,8 @@ pub struct OpenFile {
     pub dirty: bool,
     /// Accumulated write buffer. Grows to fit writes at any offset.
     pub buffer: Vec<u8>,
-    /// Read-ahead cache: (data, start_offset). Populated on first read,
-    /// subsequent reads within the cached range avoid HTTP requests.
-    pub read_cache: Option<(Vec<u8>, u64)>,
-    /// Sequential read pattern tracker.
-    pub read_pattern: ReadPattern,
+    /// 锚定窗口读状态（替代 read_cache + read_pattern）。
+    pub window: WindowState,
 }
 
 /// Thread-safe file handle table.
@@ -65,8 +63,7 @@ impl HandleTable {
                 path: Arc::from(path),
                 dirty: false,
                 buffer: Vec::new(),
-                read_cache: None,
-                read_pattern: ReadPattern::new(),
+                window: WindowState::new(DEFAULT_READ_WINDOW),
             },
         );
         fh
@@ -95,7 +92,7 @@ impl HandleTable {
                 return Err(WriteAtError::TooLarge);
             }
             file.dirty = true;
-            file.read_cache = None;
+            file.window.window = None; // 写后窗口失效，read-your-own-writes 走 dirty 臂
             if end > file.buffer.len() {
                 file.buffer.resize(end, 0);
             }
@@ -119,7 +116,7 @@ impl HandleTable {
         let mut files = self.write_table();
         if let Some(file) = files.get_mut(&fh) {
             file.dirty = true;
-            file.read_cache = None;
+            file.window.window = None;
             file.buffer = data;
             Ok(())
         } else {
@@ -141,7 +138,7 @@ impl HandleTable {
         if let Some(file) = files.get_mut(&fh) {
             if !file.dirty && file.buffer.is_empty() {
                 file.buffer = data;
-                file.read_cache = None;
+                file.window.window = None;
             }
             Ok(())
         } else {
@@ -232,65 +229,38 @@ impl HandleTable {
         self.write_table().remove(&fh)
     }
 
-    /// Update read pattern for a handle, returns true if sequential.
-    pub fn update_read_pattern(&self, fh: u64, offset: u64, size: u32) -> bool {
+    /// Adopt a grace-parked window into a freshly opened read handle
+    /// (mount open wiring); the handle's window state is otherwise fresh.
+    pub fn adopt_window(&self, fh: u64, w: ReadWindow) {
         let mut files = self.write_table();
         if let Some(file) = files.get_mut(&fh) {
-            file.read_pattern.update(offset, size)
-        } else {
-            false
+            file.window.window = Some(w);
         }
     }
 
-    /// Get read pattern info (is_first_read).
-    pub fn is_first_read(&self, fh: u64) -> bool {
-        let files = self.read_table();
-        files
-            .get(&fh)
-            .map(|f| f.read_pattern.is_first_read())
-            .unwrap_or(false)
-    }
-
-    /// Get current read cache bounds: (start_offset, data_len).
-    pub fn get_cache_info(&self, fh: u64) -> Option<(u64, usize)> {
-        let files = self.read_table();
-        files.get(&fh).and_then(|f| {
-            f.read_cache
-                .as_ref()
-                .map(|(data, offset)| (*offset, data.len()))
-        })
-    }
-
-    /// Get (last_read_end, is_sequential) for a handle.
-    pub fn get_read_state(&self, fh: u64) -> Option<(u64, bool)> {
-        let files = self.read_table();
-        files
-            .get(&fh)
-            .map(|f| (f.read_pattern.last_read_end, f.read_pattern.is_sequential))
-    }
-
-    /// Try to serve a read from the handle's read cache.
-    /// Returns Some(data) if cache hit, None if cache miss.
-    pub fn read_from_cache(&self, fh: u64, offset: u64, size: u32) -> Option<Vec<u8>> {
-        let files = self.read_table();
-        let file = files.get(&fh)?;
-        let (cache_data, cache_offset) = file.read_cache.as_ref()?;
-        let cache_end = *cache_offset + cache_data.len() as u64;
-        if offset >= *cache_offset && offset.saturating_add(size as u64) <= cache_end {
-            let start = (offset - *cache_offset) as usize;
-            let end = start + size as usize;
-            Some(cache_data[start..end].to_vec())
-        } else {
-            None
-        }
-    }
-
-    /// Store a read-ahead cache for a handle.
-    pub fn set_read_cache(&self, fh: u64, data: Vec<u8>, offset: u64) {
+    /// Serve a read through the handle's anchored window. The table write
+    /// lock is held across the fetch await, serializing reads on the same
+    /// handle (cydrive K41 semantics); the lock never leaks to the caller.
+    // 持锁跨 await 是本方法的契约（窗口状态与 fetch 的原子性），非事故。
+    #[allow(clippy::await_holding_lock)]
+    pub async fn read_window<F, Fut>(
+        &self,
+        fh: u64,
+        known_size: Option<u64>,
+        offset: u64,
+        size: u32,
+        fetch: F,
+    ) -> Result<Vec<u8>, BackendError>
+    where
+        F: Fn(u64, u32) -> Fut,
+        Fut: std::future::Future<Output = Result<Vec<u8>, BackendError>>,
+    {
         let mut files = self.write_table();
-        if let Some(file) = files.get_mut(&fh) {
-            file.read_cache = Some((data, offset));
-        }
+        let file = files
+            .get_mut(&fh)
+            .ok_or_else(|| BackendError::NotFound("Invalid file handle".into()))?;
+        file.window.size = known_size;
+        read_at(&mut file.window, offset, size, fetch).await
     }
 }
 
@@ -303,6 +273,16 @@ mod tests {
         let table = HandleTable::new();
         let fh = table.allocate("/test".to_string());
         assert!(fh > 0);
+    }
+
+    #[test]
+    fn allocate_has_fresh_window_state() {
+        let t = HandleTable::new();
+        let fh = t.allocate("/a".into());
+        let table = t.read_table();
+        let f = table.get(&fh).unwrap();
+        assert!(f.window.window.is_none());
+        assert!(f.window.size.is_none());
     }
 
     #[test]
