@@ -24,12 +24,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hashing with constant-time verification
 - `selfupdater`: backup + rollback around Windows self-replace
 - `e2e-api.sh`: summary counter no longer exceeds the total
+- `webdav`/`http` backends: 416 at EOF no longer falls back to an
+  uncapped full-file download (end-overrun 416 clamps to the
+  server-reported size and retries once); 1 GiB tail read 5.4 s → 0.03 s
+- `webdav`/`http` backends: 206 responses now validate the Content-Range
+  start offset before the body is trusted
+- `webdav`/`http` backends: primary ranged GET goes through the retry
+  wrapper (transient 5xx recoverable)
 
 ### Changed
 - Self-update signature chain removed (Option B): updates are SHA-256-only
   over HTTPS; the unused unauthenticated update router was deleted
 - README/ADR reconciled with code (env var names, config path, feature
   list, counts, superseded ADRs)
+- Read cache replaced by a 4 MiB anchored-window model with a handle
+  grace table (5 s / 64 entries); BandwidthEstimator / ReadPattern /
+  prefetch machinery removed (ADR-013)
+- `file_info_timeout` stays 5000 — WinFsp kernel data cache formally
+  disabled, read throughput owned by the user-space window model
+  (ADR-014)
 
 ---
 

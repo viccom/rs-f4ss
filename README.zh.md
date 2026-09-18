@@ -54,8 +54,8 @@
 - **HTTP 静态** 后端(nginx autoindex、Caddy、Python `http.server` ……)
 - Linux 上 **FUSE**,Windows 上 **WinFsp** — 可与所有标准工具(`cat`、`cp`、`mv`、`rm`、`find`、`git` ……)无缝配合
 - 同时支持 **读写** 与 **只读** 模式
-- 基于 HTTP Range 的分块读取,失败时回退到完整下载
-- 自适应预取(顺序访问模式检测 + 带宽估算)
+- 基于 HTTP Range 的分块读取,EOF 全链路钳制(无整文件回退)
+- 每句柄 4 MiB 锚定读窗口 + 句柄宽限表(5 s / 64 条,close 后重开复用)
 - Tokio 异步运行时 · moka LRU 缓存(TTL 可配)
 - HTTP Basic Auth · 自定义请求头 · 自动跟随重定向
 
@@ -194,7 +194,7 @@ FuseAdapter ────────┤                                         
 - **没有 `VirtualFs` trait** —— Linux(inode 模型)与 Windows(路径模型)本质不同,各自平台直接调用 `FuseAdapter` 的异步方法。
 - **同步 → 异步桥接** —— `FuseAdapter` 自带私有 `tokio::Runtime`,FUSE / WinFsp 回调通过 `self.block_on()` 调用。
 - **写缓冲** —— 写入数据累积在 `HandleTable`(上限 2 GiB),在 `flush` / `release` 时全量 PUT 上传,不支持部分写。
-- **读取策略** —— 脏写缓冲 → per-handle 读缓存 → 预取 → 后端。后端优先使用 HTTP Range,失败时回退到整文件下载。
+- **读取策略** —— 脏写缓冲 → per-handle 4 MiB 锚定窗口 → 后端。窗口锚定请求 offset、按需取数(无投机 read-ahead),EOF 全链路钳制,close 后经句柄宽限表(5 s / 64 条)保留窗口供重开复用。后端使用 HTTP Range,EOF 416 不再回退整文件下载。
 - **cfg-gated 依赖** —— `fuser` 仅 Linux 编译,`winfsp` 仅 Windows 编译。核心代码可跨平台编译。
 - **Feature flags** —— `webdav`(默认)、`http`、`api`、`serve`。按需精确选择。
 
