@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-18
+
 ### Added
 - `serve`: optional top-level `listen` key in config.json (CLI `--listen` still wins; default 0.0.0.0:8080 unchanged)
 - `serve --stop`: gracefully stop a background serve instance via the new
@@ -17,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - `share`: empty-string `user`/`pass` in share configs are now treated as unset instead of enabling authentication with empty credentials
+- Linux: `serve --stop` PID-file write compiled clean (caught by the WSL gate)
 
 ## [0.4.0] - 2026-09-18
 
