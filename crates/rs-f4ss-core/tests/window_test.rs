@@ -51,7 +51,11 @@ async fn window_clamps_fetch_to_eof() {
     let (calls, fetch) = fetch_spy(vec![b'x'; 1024]);
     let out = window::read_at(&mut st, 0, 1024, fetch).await.unwrap();
     assert_eq!(out.len(), 1024);
-    assert_eq!(calls.lock().unwrap()[0].1, 1024, "fetch len clamped to size");
+    assert_eq!(
+        calls.lock().unwrap()[0].1,
+        1024,
+        "fetch len clamped to size"
+    );
 }
 
 #[tokio::test]
@@ -77,7 +81,9 @@ async fn large_read_spans_multiple_windows() {
     let mut st = WindowState::new(window::DEFAULT_READ_WINDOW);
     st.size = Some(total as u64);
     let (calls, fetch) = fetch_spy(vec![7u8; total]);
-    let out = window::read_at(&mut st, 0, total as u32, fetch).await.unwrap();
+    let out = window::read_at(&mut st, 0, total as u32, fetch)
+        .await
+        .unwrap();
     assert_eq!(out.len(), total);
     let calls = calls.lock().unwrap();
     assert_eq!(calls.len(), 3, "9 MiB read spans 4+4+1 windows");
@@ -94,9 +100,8 @@ async fn never_serves_past_eof_when_backend_overdelivers() {
     // fetch 返回超量（500 字节）→ 服务端钳制，不越过已知 size
     let mut st = WindowState::new(window::DEFAULT_READ_WINDOW);
     st.size = Some(100);
-    let fetch = move |_anchor: u64, _len: u32| {
-        Box::pin(async { Ok(vec![b'o'; 500]) }) as FetchFuture
-    };
+    let fetch =
+        move |_anchor: u64, _len: u32| Box::pin(async { Ok(vec![b'o'; 500]) }) as FetchFuture;
     let out = window::read_at(&mut st, 0, 4096, fetch).await.unwrap();
     assert_eq!(out.len(), 100, "never serve past known EOF");
 }
@@ -107,7 +112,11 @@ async fn unknown_size_terminates_on_empty_fetch() {
     let mut st = WindowState::new(window::DEFAULT_READ_WINDOW);
     let (calls, fetch) = fetch_spy(vec![b'u'; 2000]);
     let out = window::read_at(&mut st, 0, 4096, fetch).await.unwrap();
-    assert_eq!(out.len(), 2000, "short read returns the bytes already filled");
+    assert_eq!(
+        out.len(),
+        2000,
+        "short read returns the bytes already filled"
+    );
     let calls = calls.lock().unwrap();
     assert_eq!(calls.len(), 2, "second (empty) fetch terminates the read");
 }
@@ -117,7 +126,9 @@ async fn window_anchors_at_requested_offset() {
     // 直接从 offset=999_999 读 → 首个 fetch anchor==999_999
     let mut st = WindowState::new(window::DEFAULT_READ_WINDOW);
     let (calls, fetch) = fetch_spy(vec![b'a'; 1024 * 1024]);
-    let out = window::read_at(&mut st, 999_999, 4096, fetch).await.unwrap();
+    let out = window::read_at(&mut st, 999_999, 4096, fetch)
+        .await
+        .unwrap();
     assert_eq!(out.len(), 4096);
     let calls = calls.lock().unwrap();
     assert_eq!(calls.len(), 1);

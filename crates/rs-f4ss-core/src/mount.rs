@@ -770,7 +770,11 @@ mod tests {
         let calls_before = adapter.backend.as_ref().read_calls().len();
         let out = rt.block_on(adapter.read(fh, 100, 4096)).unwrap(); // offset == size
         assert!(out.is_empty());
-        assert_eq!(adapter.backend.as_ref().read_calls().len(), calls_before, "no request at EOF");
+        assert_eq!(
+            adapter.backend.as_ref().read_calls().len(),
+            calls_before,
+            "no request at EOF"
+        );
         let out2 = rt.block_on(adapter.read(fh, 500, 16)).unwrap();
         assert!(out2.is_empty());
         assert_eq!(
@@ -810,7 +814,12 @@ mod tests {
         // 三个远距离 offset 各读 4 KiB → 3 次 fetch，且 anchor 分别等于请求 offset
         const MIB: u64 = 1024 * 1024;
         let backend = MockBackend::new();
-        backend.add_file("/seek.bin", "seek.bin", 24 * MIB, &vec![7u8; 24 * 1024 * 1024]);
+        backend.add_file(
+            "/seek.bin",
+            "seek.bin",
+            24 * MIB,
+            &vec![7u8; 24 * 1024 * 1024],
+        );
         let adapter = FuseAdapter::new(backend, &make_config());
         let rt = &adapter.rt;
 
@@ -867,7 +876,8 @@ mod tests {
 
         // Dirty the handle (this also invalidates its window), then release:
         // the dirty write-back path must not park a grace window.
-        rt.block_on(adapter.write(fh1, 0, &vec![8u8; 8192])).unwrap();
+        rt.block_on(adapter.write(fh1, 0, &vec![8u8; 8192]))
+            .unwrap();
         rt.block_on(adapter.release(fh1)).unwrap();
 
         let fh2 = rt.block_on(adapter.open("/f.bin", false)).unwrap();

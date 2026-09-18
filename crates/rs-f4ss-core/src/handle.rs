@@ -275,7 +275,6 @@ mod tests {
         assert!(fh > 0);
     }
 
-
     #[test]
     fn allocate_has_fresh_window_state() {
         let t = HandleTable::new();
