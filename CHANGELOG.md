@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `serve`: optional top-level `listen` key in config.json (CLI `--listen` still wins; default 0.0.0.0:8080 unchanged)
+- `serve --stop`: gracefully stop a background serve instance via the new
+  authenticated `POST /api/shutdown` endpoint (stops running shares and
+  mounts before exiting)
 
 ### Fixed
 - `share`: empty-string `user`/`pass` in share configs are now treated as unset instead of enabling authentication with empty credentials

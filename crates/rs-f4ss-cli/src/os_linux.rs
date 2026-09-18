@@ -35,6 +35,17 @@ pub fn get_active_mounts() -> Vec<(String, String)> {
         .collect()
 }
 
+/// Path of the serve PID file (read by `serve --stop` to locate the
+/// running instance).
+pub fn serve_pid_path() -> Option<PathBuf> {
+    Some(state_dir().join("serve.pid"))
+}
+
+/// Whether a process with the given PID is currently running (`kill -0`).
+pub fn is_pid_alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
 /// Try to acquire exclusive serve lock. Returns a guard that holds the lock until dropped.
 pub struct ServeLock {
     _file: std::fs::File,
@@ -51,6 +62,8 @@ pub fn try_acquire_serve_lock() -> Result<ServeLock, String> {
             "Another rs-f4ss serve instance is already running. Only one serve is allowed at a time.".to_string()
         );
     }
+    // Record the PID so `serve --stop` can find and stop this process.
+    let _ = fs::write(serve_pid_path(), std::process::id().to_string());
     Ok(ServeLock { _file: file })
 }
 

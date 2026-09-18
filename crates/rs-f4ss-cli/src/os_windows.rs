@@ -29,6 +29,28 @@ pub fn validate_mountpoint(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Path of the serve PID file (read by `serve --stop` to locate the
+/// running instance).
+pub fn serve_pid_path() -> Option<PathBuf> {
+    let dir = dirs::state_dir()
+        .or_else(dirs::cache_dir)
+        .unwrap_or_else(std::env::temp_dir);
+    Some(dir.join("rs-f4ss").join("serve.pid"))
+}
+
+/// Whether a process with the given PID is currently running.
+/// Conservative: if `tasklist` itself cannot be run, assume alive.
+pub fn is_pid_alive(pid: u32) -> bool {
+    std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+        .output()
+        .map(|o| {
+            let out = String::from_utf8_lossy(&o.stdout);
+            out.contains(&pid.to_string()) && !out.contains("No tasks")
+        })
+        .unwrap_or(true)
+}
+
 /// Try to acquire exclusive serve lock using a PID file.
 /// On Linux, flock is used for robustness; on Windows we use PID file + process check.
 pub struct ServeLock {
@@ -36,26 +58,14 @@ pub struct ServeLock {
 }
 
 pub fn try_acquire_serve_lock() -> Result<ServeLock, String> {
-    let dir = dirs::state_dir()
-        .or_else(dirs::cache_dir)
-        .unwrap_or_else(std::env::temp_dir);
-    let dir = dir.join("rs-f4ss");
-    let _ = std::fs::create_dir_all(&dir);
-    let pid_path = dir.join("serve.pid");
+    let pid_path =
+        serve_pid_path().ok_or_else(|| "Cannot determine serve PID file path".to_string())?;
+    let _ = std::fs::create_dir_all(pid_path.parent().unwrap_or(Path::new(".")));
 
     // Check existing PID
     if let Ok(content) = std::fs::read_to_string(&pid_path) {
         if let Ok(pid) = content.trim().parse::<u32>() {
-            // Check if process is still alive via tasklist
-            let alive = std::process::Command::new("tasklist")
-                .args(["/FI", &format!("PID eq {pid}"), "/NH"])
-                .output()
-                .map(|o| {
-                    let out = String::from_utf8_lossy(&o.stdout);
-                    out.contains(&pid.to_string()) && !out.contains("No tasks")
-                })
-                .unwrap_or(true);
-            if alive {
+            if is_pid_alive(pid) {
                 return Err(format!(
                     "Another rs-f4ss serve instance is already running (PID {pid}). \
                      Only one serve is allowed at a time."

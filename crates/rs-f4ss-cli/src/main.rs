@@ -80,6 +80,20 @@ enum Commands {
         listen: Option<String>,
         #[arg(long, help = "Config file path (default: platform config dir)")]
         config: Option<String>,
+        #[arg(long, help = "Stop the running serve instance via its API")]
+        stop: bool,
+        #[arg(
+            long,
+            env = "RS_F4SS_API_USER",
+            help = "API auth username (used by --stop)"
+        )]
+        api_user: Option<String>,
+        #[arg(
+            long,
+            env = "RS_F4SS_API_PASS",
+            help = "API auth password (used by --stop)"
+        )]
+        api_pass: Option<String>,
     },
     /// Manage mount configs (via API)
     Mount {
@@ -478,9 +492,21 @@ fn run_with_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Serve {
             ref listen,
             ref config,
+            ref stop,
+            ref api_user,
+            ref api_pass,
         }) => {
             #[cfg(feature = "api")]
-            return handle_serve(listen.clone(), config.as_deref());
+            {
+                if *stop {
+                    return handle_serve_stop(
+                        config.as_deref(),
+                        api_user.as_deref(),
+                        api_pass.as_deref(),
+                    );
+                }
+                return handle_serve(listen.clone(), config.as_deref());
+            }
             #[cfg(not(feature = "api"))]
             {
                 eprintln!("Serve command requires 'api' feature. Rebuild with: cargo build --features api");
@@ -948,7 +974,12 @@ fn handle_serve(
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         let listener = tokio::net::TcpListener::bind(listen.as_str()).await?;
-        axum::serve(listener, app).await
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                rs_f4ss_core::api::shutdown_signal().await;
+                tracing::info!("Shutdown requested via API");
+            })
+            .await
     })?;
 
     Ok(())
@@ -961,6 +992,81 @@ fn resolve_listen(cli: Option<&str>, store: Option<&str>) -> String {
     cli.map(str::to_string)
         .or_else(|| store.map(str::to_string))
         .unwrap_or_else(|| "0.0.0.0:8080".to_string())
+}
+
+/// Build the loopback URL of the shutdown endpoint from the serve listen
+/// address. The bind address is not necessarily reachable from this
+/// machine (0.0.0.0, LAN IPs), so the host is always replaced with
+/// 127.0.0.1 and only the port is kept.
+#[cfg(feature = "api")]
+fn resolve_shutdown_url(store_listen: Option<&str>) -> String {
+    let listen = store_listen.unwrap_or("0.0.0.0:8080");
+    let port = listen.rsplit_once(':').map(|(_, p)| p).unwrap_or("8080");
+    format!("http://127.0.0.1:{port}/api/shutdown")
+}
+
+/// `serve --stop`: gracefully stop the background serve instance by
+/// calling its authenticated `POST /api/shutdown` endpoint. The PID file
+/// decides whether an instance is running at all (stale PID files are
+/// cleaned up); the listen address comes from the config file.
+#[cfg(feature = "api")]
+fn handle_serve_stop(
+    config_path: Option<&str>,
+    api_user: Option<&str>,
+    api_pass: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let pid_path = os::serve_pid_path().ok_or("Cannot determine serve PID file path")?;
+    let pid: Option<u32> = std::fs::read_to_string(&pid_path)
+        .ok()
+        .and_then(|content| content.trim().parse().ok());
+    let Some(pid) = pid else {
+        println!("No serve instance running");
+        return Ok(());
+    };
+    if !os::is_pid_alive(pid) {
+        // Stale PID file from a dead serve — clean it up (idempotent stop).
+        let _ = std::fs::remove_file(&pid_path);
+        println!("No serve instance running");
+        return Ok(());
+    }
+
+    let (user, pass) = match (api_user, api_pass) {
+        (Some(u), Some(p)) => (u, p),
+        _ => {
+            return Err(
+                "serve --stop requires API credentials: pass --api-user/--api-pass \
+                 or set RS_F4SS_API_USER/RS_F4SS_API_PASS"
+                    .into(),
+            )
+        }
+    };
+
+    let config_file = match config_path {
+        Some(p) => std::path::PathBuf::from(p),
+        None => rs_f4ss_core::persistence::default_config_path()
+            .ok_or("Cannot determine config directory")?,
+    };
+    let store_listen = rs_f4ss_core::persistence::load_listen(&config_file);
+    let url = resolve_shutdown_url(store_listen.as_deref());
+
+    let client = reqwest::blocking::ClientBuilder::new()
+        .timeout(Duration::from_secs(5))
+        .build()?;
+    let resp = client.post(&url).basic_auth(user, Some(pass)).send().map_err(|e| {
+        format!(
+            "Cannot reach serve API at {url} — is it running? ({e}) \
+             If the process is stuck, stop it manually (e.g. Stop-Process -Id {pid})."
+        )
+    })?;
+    let status = resp.status();
+    if status.as_u16() == 401 {
+        return Err("Unauthorized (401): wrong API credentials".into());
+    }
+    if !status.is_success() {
+        return Err(format!("serve API returned {status}").into());
+    }
+    println!("Serve (PID {pid}) shutting down");
+    Ok(())
 }
 
 fn main() {
@@ -1509,6 +1615,58 @@ mod tests {
     #[test]
     fn test_resolve_listen_defaults_when_both_missing() {
         assert_eq!(resolve_listen(None, None), "0.0.0.0:8080");
+    }
+
+    #[cfg(feature = "api")]
+    #[test]
+    fn test_resolve_shutdown_url_replaces_wildcard_host() {
+        assert_eq!(
+            resolve_shutdown_url(Some("0.0.0.0:8081")),
+            "http://127.0.0.1:8081/api/shutdown"
+        );
+    }
+
+    #[cfg(feature = "api")]
+    #[test]
+    fn test_resolve_shutdown_url_defaults_when_no_listen() {
+        assert_eq!(
+            resolve_shutdown_url(None),
+            "http://127.0.0.1:8080/api/shutdown"
+        );
+    }
+
+    #[cfg(feature = "api")]
+    #[test]
+    fn test_resolve_shutdown_url_keeps_port_for_specific_host() {
+        assert_eq!(
+            resolve_shutdown_url(Some("192.168.1.5:9000")),
+            "http://127.0.0.1:9000/api/shutdown"
+        );
+    }
+
+    #[test]
+    fn test_parse_serve_stop() {
+        let cli = parse_cli(&["rs-f4ss", "serve", "--stop"]).unwrap();
+        match cli.command {
+            Some(Commands::Serve { stop: true, .. }) => {}
+            _ => panic!("Expected Serve --stop"),
+        }
+    }
+
+    #[test]
+    fn test_is_pid_alive_current_process() {
+        assert!(os::is_pid_alive(std::process::id()));
+    }
+
+    #[test]
+    fn test_is_pid_alive_nonexistent_pid() {
+        assert!(!os::is_pid_alive(4_000_000));
+    }
+
+    #[test]
+    fn test_serve_pid_path_is_serve_pid() {
+        let path = os::serve_pid_path().expect("serve PID path should be resolvable");
+        assert_eq!(path.file_name().unwrap().to_string_lossy(), "serve.pid");
     }
 
     #[cfg(feature = "serve")]

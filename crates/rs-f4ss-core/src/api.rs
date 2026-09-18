@@ -75,6 +75,31 @@ impl AppState {
 }
 
 // ---------------------------------------------------------------------------
+// Shutdown signal
+// ---------------------------------------------------------------------------
+
+/// Process-wide shutdown signal. `POST /api/shutdown` notifies it; the
+/// serve loop selects on it to exit gracefully. A `Notify` keeps at most
+/// one permit, so a notify that fires before anyone waits is still
+/// observed — exactly the single-shot semantics a shutdown needs.
+static SHUTDOWN: std::sync::OnceLock<tokio::sync::Notify> = std::sync::OnceLock::new();
+
+fn shutdown_notify() -> &'static tokio::sync::Notify {
+    SHUTDOWN.get_or_init(tokio::sync::Notify::new)
+}
+
+/// Request process exit (idempotent, single-shot).
+pub fn trigger_shutdown() {
+    shutdown_notify().notify_one();
+}
+
+/// Resolves once a shutdown has been requested. Public so the CLI serve
+/// loop can hand it to `axum::serve::with_graceful_shutdown`.
+pub async fn shutdown_signal() {
+    shutdown_notify().notified().await
+}
+
+// ---------------------------------------------------------------------------
 // Auth middleware
 // ---------------------------------------------------------------------------
 
@@ -246,7 +271,8 @@ pub fn create_router(state: Arc<AppState>) -> Router {
             get(get_mount).put(update_mount).delete(delete_mount),
         )
         .route("/api/mounts/{id}/start", post(start_mount))
-        .route("/api/mounts/{id}/stop", post(stop_mount));
+        .route("/api/mounts/{id}/stop", post(stop_mount))
+        .route("/api/shutdown", post(shutdown));
 
     #[cfg(feature = "serve")]
     let router = router
@@ -702,6 +728,50 @@ async fn stop_share(
 }
 
 // ---------------------------------------------------------------------------
+// Shutdown (POST /api/shutdown)
+// ---------------------------------------------------------------------------
+
+/// How long the shutdown handler waits before firing the exit signal,
+/// to let the 200 OK response reach the client first (same pattern as
+/// the self-update restart grace period).
+const SHUTDOWN_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// Stop all shares in a Running/Starting state (feature = "serve").
+#[cfg(feature = "serve")]
+fn stop_all_shares(state: &AppState) {
+    for info in state.shares.list() {
+        if matches!(
+            info.state,
+            crate::share_manager::ShareState::Running | crate::share_manager::ShareState::Starting
+        ) {
+            if let Err(e) = state.shares.stop(&info.id) {
+                tracing::warn!("shutdown: stop share {}: {e}", info.id);
+            }
+        }
+    }
+}
+
+/// Gracefully stop the serve process: stop every running share and
+/// mount, answer the client, then trigger process exit on a detached
+/// task so the response is delivered before the server tears down.
+async fn shutdown(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    #[cfg(feature = "serve")]
+    stop_all_shares(&state);
+    state.mounts.stop_all();
+
+    tokio::spawn(async {
+        tokio::time::sleep(SHUTDOWN_GRACE_PERIOD).await;
+        trigger_shutdown();
+    });
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "status": "shutting_down" })),
+    )
+        .into_response()
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -1133,6 +1203,43 @@ mod tests {
             .unwrap();
         let resp2 = app2.oneshot(req2).await.unwrap();
         assert_eq!(resp2.status(), StatusCode::OK);
+    }
+
+    // -----------------------------------------------------------------
+    // Shutdown API tests
+    // -----------------------------------------------------------------
+
+    /// `POST /api/shutdown` must sit behind the auth middleware (not in
+    /// the public whitelist): missing credentials produce 401.
+    #[tokio::test]
+    async fn test_shutdown_without_auth_returns_401() {
+        let app = test_app_with_creds("admin", "admin");
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/shutdown")
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// `POST /api/shutdown` with valid credentials returns 200 and a
+    /// `shutting_down` status. The exit signal fires on a detached task
+    /// and is harmless here — nothing in the test selects on it.
+    #[tokio::test]
+    async fn test_shutdown_with_auth_returns_shutting_down() {
+        let app = test_app_with_creds("admin", "admin");
+        let req = Request::builder()
+            .method("POST")
+            .uri("/api/shutdown")
+            .header("authorization", basic_auth_header("admin", "admin"))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["status"], "shutting_down");
     }
 
     // -----------------------------------------------------------------
