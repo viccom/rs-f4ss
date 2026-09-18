@@ -151,6 +151,8 @@ pub fn default_config_path() -> Option<PathBuf> {
 struct AppStore {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     auth: Option<AuthConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    listen: Option<String>,
     #[serde(default)]
     mounts: Vec<MountEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -175,15 +177,34 @@ struct ShareConfigSer {
     read_only: bool,
 }
 
+/// Normalize empty-string user/pass to `None`: an empty credential string must
+/// not silently enable Basic auth with empty credentials.
+#[cfg(feature = "serve")]
+pub(crate) fn normalize_share_auth(
+    id: &str,
+    user: Option<String>,
+    pass: Option<String>,
+) -> (Option<String>, Option<String>) {
+    let had_empty = user.as_deref().is_some_and(str::is_empty)
+        || pass.as_deref().is_some_and(str::is_empty);
+    let user = user.filter(|s| !s.is_empty());
+    let pass = pass.filter(|s| !s.is_empty());
+    if had_empty {
+        warn!("Share {id}: empty user/pass treated as no authentication");
+    }
+    (user, pass)
+}
+
 #[cfg(feature = "serve")]
 impl From<ShareConfigSer> for ShareConfig {
     fn from(s: ShareConfigSer) -> Self {
+        let (user, pass) = normalize_share_auth(&s.id, s.user, s.pass);
         ShareConfig {
             id: s.id,
             path: s.path,
             addr: s.addr,
-            user: s.user,
-            pass: s.pass,
+            user,
+            pass,
             read_only: s.read_only,
         }
     }
@@ -232,6 +253,7 @@ fn read_store(path: &Path) -> AppStore {
     if let Ok(mounts) = serde_json::from_str::<Vec<MountEntry>>(&data) {
         return AppStore {
             auth: None,
+            listen: None,
             mounts,
             shares: Vec::new(),
         };
@@ -307,6 +329,12 @@ pub fn save_auth(auth: &AuthConfig, path: &Path) -> Result<(), String> {
     let mut store = read_store(path);
     store.auth = Some(auth.clone());
     write_store(&store, path)
+}
+
+/// Optional top-level `listen` address for `serve`, read from the config file.
+#[cfg(feature = "api")]
+pub fn load_listen(path: &Path) -> Option<String> {
+    read_store(path).listen
 }
 
 // ---------------------------------------------------------------------------
@@ -533,6 +561,36 @@ mod tests {
         save(&mounts, &path);
         assert_eq!(load(&path).len(), 2);
         assert_eq!(load_shares(&path).len(), 1);
+    }
+
+    #[test]
+    #[cfg(all(feature = "api", feature = "serve"))]
+    fn test_load_listen_and_empty_share_auth_normalized() {
+        let dir = std::env::temp_dir().join("rs-f4ss-listen-norm-test");
+        let _ = fs::remove_dir_all(&dir);
+        let path = dir.join("config.json");
+        fs::create_dir_all(&dir).unwrap();
+
+        // Same structure AppStore serializes, written by hand.
+        fs::write(
+            &path,
+            r#"{
+  "listen": "127.0.0.1:9999",
+  "mounts": [],
+  "shares": [
+    { "id": "s1", "path": "/tmp", "addr": "0.0.0.0:9001", "user": "", "pass": "", "read_only": false }
+  ]
+}"#,
+        )
+        .unwrap();
+
+        assert_eq!(load_listen(&path), Some("127.0.0.1:9999".to_string()));
+
+        let shares = load_shares(&path);
+        assert_eq!(shares.len(), 1);
+        assert_eq!(shares[0].id, "s1");
+        assert_eq!(shares[0].user, None, "empty user must normalize to None");
+        assert_eq!(shares[0].pass, None, "empty pass must normalize to None");
     }
 
     #[test]

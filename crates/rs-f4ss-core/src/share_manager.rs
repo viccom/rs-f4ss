@@ -129,6 +129,9 @@ impl ShareManager {
     // ── CRUD ──
 
     pub fn add(&self, entry: ShareConfig) -> Result<String, String> {
+        let (user, pass) = persistence::normalize_share_auth(&entry.id, entry.user, entry.pass);
+        let entry = ShareConfig { user, pass, ..entry };
+
         // Validate path exists
         let p = PathBuf::from(&entry.path);
         if !p.is_dir() {
@@ -186,6 +189,9 @@ impl ShareManager {
         if id != update.id {
             return Err("Cannot change share ID".to_string());
         }
+        let (user, pass) =
+            persistence::normalize_share_auth(&update.id, update.user, update.pass);
+        let update = ShareConfig { user, pass, ..update };
         let p = PathBuf::from(&update.path);
         if !p.is_dir() {
             return Err(format!(
@@ -440,5 +446,33 @@ mod tests {
         cfg.path = "/nonexistent/path/xyz".to_string();
         let err = mgr.add(cfg).unwrap_err();
         assert!(err.contains("does not exist"));
+    }
+
+    #[test]
+    fn test_add_empty_user_pass_treated_as_no_auth() {
+        let mgr = ShareManager::new();
+        let mut cfg = test_config("emptyauth");
+        cfg.user = Some(String::new());
+        cfg.pass = Some(String::new());
+        mgr.add(cfg).unwrap();
+        let info = mgr.get("emptyauth").unwrap();
+        assert!(!info.has_auth, "empty credentials must not enable auth");
+        let entry = mgr.config_entries().get("emptyauth").unwrap();
+        assert_eq!(entry.user, None);
+        assert_eq!(entry.pass, None);
+    }
+
+    #[test]
+    fn test_add_empty_pass_keeps_user() {
+        let mgr = ShareManager::new();
+        let mut cfg = test_config("emptypass");
+        cfg.user = Some("admin".to_string());
+        cfg.pass = Some(String::new());
+        mgr.add(cfg).unwrap();
+        let info = mgr.get("emptypass").unwrap();
+        assert!(info.has_auth);
+        let entry = mgr.config_entries().get("emptypass").unwrap();
+        assert_eq!(entry.user, Some("admin".to_string()));
+        assert_eq!(entry.pass, None);
     }
 }

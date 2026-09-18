@@ -73,8 +73,11 @@ enum Commands {
     },
     /// Start REST API server for dynamic mount/share management
     Serve {
-        #[arg(long, default_value = "0.0.0.0:8080", help = "Listen address")]
-        listen: String,
+        #[arg(
+            long,
+            help = "Listen address [default: config file listen or 0.0.0.0:8080]"
+        )]
+        listen: Option<String>,
         #[arg(long, help = "Config file path (default: platform config dir)")]
         config: Option<String>,
     },
@@ -477,7 +480,7 @@ fn run_with_cli(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             ref config,
         }) => {
             #[cfg(feature = "api")]
-            return handle_serve(listen, config.as_deref());
+            return handle_serve(listen.clone(), config.as_deref());
             #[cfg(not(feature = "api"))]
             {
                 eprintln!("Serve command requires 'api' feature. Rebuild with: cargo build --features api");
@@ -891,7 +894,10 @@ fn api_stop(
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "api")]
-fn handle_serve(listen: &str, config_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+fn handle_serve(
+    listen: Option<String>,
+    config_path: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let _lock = os::try_acquire_serve_lock()?;
 
     let path = match config_path {
@@ -900,12 +906,15 @@ fn handle_serve(listen: &str, config_path: Option<&str>) -> Result<(), Box<dyn s
             .ok_or("Cannot determine config directory")?,
     };
 
+    let store_listen = rs_f4ss_core::persistence::load_listen(&path);
+    let listen = resolve_listen(listen.as_deref(), store_listen.as_deref());
+
     let auth = rs_f4ss_core::persistence::load_auth(&path);
     tracing::info!("Auth user: {}", auth.username);
     let default_creds = rs_f4ss_core::persistence::is_default_auth(&auth);
     if default_creds {
         tracing::warn!("Using default credentials (admin:admin). Please change the password via Web UI or CLI.");
-        if !is_loopback_addr(listen) {
+        if !is_loopback_addr(&listen) {
             return Err(format!(
                 "Refusing to serve on {listen} with default credentials (admin:admin). \
                  Change the password first (Web UI or `rs-f4ss serve` on 127.0.0.1), \
@@ -938,11 +947,20 @@ fn handle_serve(listen: &str, config_path: Option<&str>) -> Result<(), Box<dyn s
 
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        let listener = tokio::net::TcpListener::bind(listen).await?;
+        let listener = tokio::net::TcpListener::bind(listen.as_str()).await?;
         axum::serve(listener, app).await
     })?;
 
     Ok(())
+}
+
+/// Serve listen address precedence: `--listen` flag > config file `listen`
+/// key > built-in default.
+#[cfg(feature = "api")]
+fn resolve_listen(cli: Option<&str>, store: Option<&str>) -> String {
+    cli.map(str::to_string)
+        .or_else(|| store.map(str::to_string))
+        .unwrap_or_else(|| "0.0.0.0:8080".to_string())
 }
 
 fn main() {
@@ -1336,7 +1354,9 @@ mod tests {
     fn test_parse_serve() {
         let cli = parse_cli(&["rs-f4ss", "serve", "--listen", "0.0.0.0:9999"]).unwrap();
         match cli.command {
-            Some(Commands::Serve { ref listen, .. }) => assert_eq!(listen, "0.0.0.0:9999"),
+            Some(Commands::Serve { ref listen, .. }) => {
+                assert_eq!(listen.as_deref(), Some("0.0.0.0:9999"))
+            }
             _ => panic!("Expected Serve"),
         }
     }
@@ -1465,6 +1485,30 @@ mod tests {
         let (user, hash) = auth.expect("auth should be enabled");
         assert_eq!(user, "u");
         assert_eq!(hash, rs_f4ss_core::persistence::sha256_hex("p"));
+    }
+
+    #[cfg(feature = "api")]
+    #[test]
+    fn test_resolve_listen_cli_wins() {
+        assert_eq!(
+            resolve_listen(Some("127.0.0.1:1"), Some("10.0.0.9:2")),
+            "127.0.0.1:1"
+        );
+    }
+
+    #[cfg(feature = "api")]
+    #[test]
+    fn test_resolve_listen_config_file_fallback() {
+        assert_eq!(
+            resolve_listen(None, Some("127.0.0.1:9999")),
+            "127.0.0.1:9999"
+        );
+    }
+
+    #[cfg(feature = "api")]
+    #[test]
+    fn test_resolve_listen_defaults_when_both_missing() {
+        assert_eq!(resolve_listen(None, None), "0.0.0.0:8080");
     }
 
     #[cfg(feature = "serve")]

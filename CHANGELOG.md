@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `serve`: optional top-level `listen` key in config.json (CLI `--listen` still wins; default 0.0.0.0:8080 unchanged)
+
+### Fixed
+- `share`: empty-string `user`/`pass` in share configs are now treated as unset instead of enabling authentication with empty credentials
+
 ## [0.4.0] - 2026-09-18
 
 ### Added
