@@ -63,7 +63,9 @@ pub fn try_acquire_serve_lock() -> Result<ServeLock, String> {
         );
     }
     // Record the PID so `serve --stop` can find and stop this process.
-    let _ = fs::write(serve_pid_path(), std::process::id().to_string());
+    if let Some(pid_file) = serve_pid_path() {
+        let _ = fs::write(pid_file, std::process::id().to_string());
+    }
     Ok(ServeLock { _file: file })
 }
 
