@@ -323,7 +323,7 @@ Use **Tauri v2** with inlined Vue 3 UI and `withGlobalTauri: true` for `window._
 
 ## ADR-011 — Adaptive Prefetch with Bandwidth Estimation
 
-- **Status**: Accepted
+- **Status**: Superseded by ADR-013
 - **Date**: 2026-06-05
 
 ### Context
@@ -380,6 +380,76 @@ Add `serve` feature flag implementing an embedded HTTP + WebDAV file server. The
 
 ---
 
+## ADR-013 — Read Model: 4 MiB Anchored Window (no speculative prefetch)
+
+- **Status**: Accepted
+- **Date**: 2026-09-18
+
+### Context
+
+ADR-011's adaptive prefetch relied on speculative read-ahead sized by bandwidth estimation. In practice its fallback path was the dominant cost: reading the last 4 MiB of a 1 GiB file sent a `Range` with an end-offset beyond EOF, got a 416, and fell back to `read_full_and_slice` — two full 1 GiB downloads, ~5.4 s wall time (0.7 MB/s effective; measured 2026-09-18). Speculative prefetch also wastes bandwidth on random reads and player seek churn. Plan: `docs/plans/2026-09-18-winfsp-read-path-overhaul.md` (decisions D1–D4, D7).
+
+### Decision
+
+Replace the prefetch pipeline with a per-handle anchored window (implemented in `crates/rs-f4ss-core/src/window.rs`):
+
+- One 4 MiB window per file handle, anchored at the requested offset — no sequential-pattern detection, no speculative read-ahead beyond the window
+- The window is fetched on demand when a read falls outside it; EOF is clamped through every layer (reader → window → backend), so tail reads stop at file size instead of issuing out-of-range requests
+- A handle grace table (5 s TTL, 64 entries, size witness) keeps the last window across close/reopen, so short-lived reopens are served from user space while the size witness guards against server-side content changes
+- `BandwidthEstimator`, `ReadPattern`, and `PrefetchSlot` are deleted entirely
+
+### Alternatives Considered
+
+| Strategy | Pros | Cons |
+|----------|------|------|
+| **4 MiB anchored window** (accepted) | Memory bounded by window; random-seek friendly; no 416 fallback | Serial window may underuse high-latency × high-bandwidth links |
+| Adaptive prefetch (ADR-011) | Auto-tunes sequential throughput | Speculative; 416 → full-file fallback pathology; wasted bandwidth on random reads |
+| Fixed 16 MiB prefetch | Simple; good sequential throughput | Wastes bandwidth on slow networks; too small on fast ones |
+| Full-file cache | Fast rereads | Unbounded memory |
+
+### Consequences
+
+- **Positive**: 1 GiB tail read drops from 416 → full-file fallback at 5.4 s to an in-window read with zero out-of-range requests (expected; plan Task 7 verifies); memory bounded by 4 MiB per handle plus 64 grace entries
+- **Negative**: Sequential throughput may fall below the old 16 MiB prefetch on high-latency × high-bandwidth links (baseline: 209/211 MB/s over 256 MiB sequential, loopback, 2026-09-18)
+- **Mitigation**: Window size is a constant; if benchmarks show >20% sequential regression, raise it to 16 MiB and re-measure (plan Task 7 Step 3)
+
+---
+
+## ADR-014 — WinFsp Kernel Data Cache: Disabled by Design (file_info_timeout=5000)
+
+- **Status**: Accepted
+- **Date**: 2026-09-18
+
+### Context
+
+On WinFsp, `file_info_timeout` doubles as the kernel Cache Manager data-cache switch: only `u32::MAX` (-1) enables CM file-data caching; any bounded value caches metadata only. The code historically used `u32::MAX` for kernel-level read-ahead and data caching, but this conflicts with the full-file-PUT write model (ADR-003): the CM defers write-back indefinitely, so the cleanup-time flush-and-purge can drop dirty pages before the write callback ever runs — data silently lost on overwrite.
+
+### Decision
+
+Keep `file_info_timeout = 5000` (metadata only). The kernel data cache is formally abandoned; read throughput is the responsibility of the user-space window model (ADR-013). Measured trade-off (2026-09-17):
+
+| Setting | e2e suite | Write throughput |
+|---------|-----------|------------------|
+| `u32::MAX` (CM data cache on) | 44/51 | 9708 MB/s |
+| `5000` (accepted) | 51/51 | 210 MB/s |
+
+The 9708 MB/s figure is not real backend throughput: it reflects writes absorbed into the Cache Manager whose deferred write-back was then dropped by the cleanup-time flush-and-purge, which is exactly why 7 of 51 e2e tests failed. Plan: `docs/plans/2026-09-18-winfsp-read-path-overhaul.md` (decision D5).
+
+### Alternatives Considered
+
+| Setting | Pros | Cons |
+|---------|------|------|
+| **`5000` bounded** (accepted) | Writes reach the backend reliably (51/51); metadata still kernel-cached | No kernel read cache; user space owns read throughput |
+| `u32::MAX` | Kernel read-ahead + data caching "for free"; apparent write throughput 9708 MB/s | CM deferred write-back dropped at cleanup → silent data loss (44/51) |
+
+### Consequences
+
+- **Positive**: No silent data loss on overwrite (e2e 51/51); the trade-off is now documented in code (`mount_windows.rs`) and here
+- **Negative**: Apparent write throughput drops from 9708 MB/s to ~210 MB/s; read performance depends entirely on ADR-013
+- **Future**: The staging + background-upload write path is out of scope for this ADR; `file_info_timeout` is already decoupled from write performance (plan risk #3)
+
+---
+
 ## ADR Index
 
 | ADR | Title | Status | Date |
@@ -394,5 +464,7 @@ Add `serve` feature flag implementing an embedded HTTP + WebDAV file server. The
 | ADR-008 | WebDAV Server as Protocol Aggregator | Proposed | 2026-06-02 |
 | ADR-009 | FUSE Kernel Cache TTL: 60s | Accepted | 2026-06-04 |
 | ADR-010 | Tauri Desktop over Custom GUI | Accepted | 2026-06-04 |
-| ADR-011 | Adaptive Prefetch with Bandwidth Estimation | Accepted | 2026-06-05 |
+| ADR-011 | Adaptive Prefetch with Bandwidth Estimation | Superseded by ADR-013 | 2026-06-05 |
 | ADR-012 | File Sharing Server: HTTP + WebDAV | Accepted | 2026-06-05 |
+| ADR-013 | Read Model: 4 MiB Anchored Window | Accepted | 2026-09-18 |
+| ADR-014 | WinFsp Kernel Data Cache: Disabled by Design | Accepted | 2026-09-18 |
