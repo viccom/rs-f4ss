@@ -66,6 +66,11 @@ impl HttpBackend {
         offset: u64,
         size: u32,
     ) -> Result<Vec<u8>, BackendError> {
+        // Zero-length read: nothing to fetch — and without this guard a
+        // malformed `bytes=<off>-<off-1>` Range would go out.
+        if size == 0 {
+            return Ok(Vec::new());
+        }
         let total = match self.ranged_get_once(url, path, offset, size).await? {
             RangedRead::Data(data) => return Ok(data),
             RangedRead::Unsatisfied { total } => total,
@@ -77,7 +82,14 @@ impl HttpBackend {
                 match self.ranged_get_once(url, path, offset, clamped).await? {
                     RangedRead::Data(data) => Ok(data),
                     // A repeat 416 is answered as EOF, not retried again.
-                    RangedRead::Unsatisfied { .. } => Ok(Vec::new()),
+                    RangedRead::Unsatisfied { total: second_total } => {
+                        tracing::warn!(
+                            "[read] second 416 after clamped retry, answering EOF \
+                             (empty read): url={url} offset={offset} \
+                             first_total={total:?} second_total={second_total:?}"
+                        );
+                        Ok(Vec::new())
+                    }
                 }
             }
             // offset is at/past EOF, or the server reported no size.
@@ -118,6 +130,24 @@ impl HttpBackend {
         let status = resp.status().as_u16();
 
         if status == 206 {
+            // Validate the start offset in Content-Range before trusting the
+            // body (mirror of the webdav check): a misrouted or cached
+            // response would otherwise silently serve shifted data.
+            if let Some(cr) = resp
+                .headers()
+                .get("content-range")
+                .and_then(|v| v.to_str().ok())
+            {
+                if !super::common::content_range_start_matches(cr, offset) {
+                    let msg = format!(
+                        "server returned wrong range: requested offset {offset}, got `{cr}`"
+                    );
+                    super::common::drain_response(resp).await;
+                    return Err(BackendError::Internal(msg));
+                }
+            }
+            // Header missing → tolerated: the body length is still bounded by
+            // reqwest's Content-Length enforcement.
             let data = resp
                 .bytes()
                 .await
@@ -158,7 +188,12 @@ impl HttpBackend {
         let need = size as usize;
         let skip = match usize::try_from(offset) {
             Ok(s) => s,
-            Err(_) => return Ok(RangedRead::Data(Vec::new())),
+            // offset > usize::MAX (32-bit targets): drain so the pooled
+            // connection is reused before answering the empty read.
+            Err(_) => {
+                super::common::drain_response(resp).await;
+                return Ok(RangedRead::Data(Vec::new()));
+            }
         };
 
         use futures_util::StreamExt;
@@ -1147,5 +1182,50 @@ mod read_path_tests {
             format!("{err}").contains("64 MiB"),
             "expected skip-cap error, got: {err}"
         );
+    }
+
+    /// A 206 whose Content-Range starts at the wrong offset must surface as
+    /// an error, not silently serve shifted data (mirror of the webdav test,
+    /// R-B2).
+    #[tokio::test]
+    async fn read_206_wrong_content_range_start_is_an_error() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let req = read_http_request(&mut s).unwrap();
+            expect_range(&req, 10, 5);
+            s.write_all(
+                b"HTTP/1.1 206\r\nContent-Range: bytes 0-4/100\r\n\
+                  Content-Length: 5\r\nConnection: close\r\n\r\nhello",
+            )
+            .unwrap();
+        });
+        let backend = backend_for_http(addr);
+        let err = backend.read("/f.bin", 10, 5).await.unwrap_err();
+        assert!(format!("{err}").contains("wrong range"), "{err}");
+    }
+
+    /// Sentinel regression (R-B1): `Content-Range: bytes 100-104/200` must
+    /// NOT satisfy a request at offset 10 — the `-` after the start offset
+    /// is what keeps a decimal-prefix "match" from passing. Both backends
+    /// share content_range_start_matches, so this pins the http call site.
+    #[tokio::test]
+    async fn read_206_content_range_start_match_requires_dash_sentinel() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            let req = read_http_request(&mut s).unwrap();
+            expect_range(&req, 10, 5);
+            s.write_all(
+                b"HTTP/1.1 206\r\nContent-Range: bytes 100-104/200\r\n\
+                  Content-Length: 5\r\nConnection: close\r\n\r\nworld",
+            )
+            .unwrap();
+        });
+        let backend = backend_for_http(addr);
+        let err = backend.read("/f.bin", 10, 5).await.unwrap_err();
+        assert!(format!("{err}").contains("wrong range"), "{err}");
     }
 }

@@ -18,9 +18,32 @@ pub(crate) fn should_retry_request(method: &reqwest::Method, _has_body: bool) ->
 }
 
 /// Parse the total size from a 416 response's `Content-Range: bytes */<size>`.
+/// Tolerates unit case (`Bytes`) and extra whitespace between tokens (the
+/// range unit is case-insensitive per RFC 9110).
 pub(crate) fn parse_unsatisfied_size(v: &str) -> Option<u64> {
-    let rest = v.trim().strip_prefix("bytes */")?;
-    rest.trim().parse().ok()
+    let mut parts = v.split_whitespace();
+    if !matches!(parts.next(), Some(u) if u.eq_ignore_ascii_case("bytes")) {
+        return None;
+    }
+    let size = parts.next()?.strip_prefix("*/")?;
+    size.parse().ok()
+}
+
+/// True if a 206 `Content-Range` header (e.g. `bytes 10-14/100`) starts its
+/// range exactly at `offset`. The `-` after the start is load-bearing: it is
+/// the sentinel that keeps `bytes 100-…` from matching offset 10. Garbage
+/// input returns false (callers decide whether a missing header is
+/// tolerated). Unit case and whitespace between tokens are tolerated
+/// (RFC 9110: range units are case-insensitive).
+pub(crate) fn content_range_start_matches(cr: &str, offset: u64) -> bool {
+    let mut parts = cr.split_whitespace();
+    if !matches!(parts.next(), Some(u) if u.eq_ignore_ascii_case("bytes")) {
+        return false;
+    }
+    match parts.next().and_then(|range| range.split_once('-')) {
+        Some((start, _)) => start == offset.to_string(),
+        None => false,
+    }
 }
 
 pub(crate) struct HttpClient {
@@ -172,6 +195,8 @@ impl HttpClient {
         }
     }
 
+    // Only the http backend uses this; keep webdav-only builds warning-free.
+    #[cfg_attr(not(feature = "http"), allow(dead_code))]
     pub(crate) async fn read_full_and_slice(
         &self,
         url: &str,
@@ -294,6 +319,39 @@ mod tests {
     #[test]
     fn test_retry_policy_allows_get_without_body() {
         assert!(should_retry_request(&reqwest::Method::GET, false));
+    }
+
+    #[test]
+    fn test_content_range_start_matches_strict_forms() {
+        // Exact start offset with the '-' sentinel.
+        assert!(content_range_start_matches("bytes 10-14/100", 10));
+        assert!(content_range_start_matches("bytes 10-", 10));
+        assert!(!content_range_start_matches("bytes 100-104/200", 10));
+        assert!(!content_range_start_matches("bytes 0-4/100", 10));
+        assert!(!content_range_start_matches("bytes 10", 10)); // no '-' sentinel
+        assert!(!content_range_start_matches("garbage", 10));
+    }
+
+    #[test]
+    fn test_content_range_start_matches_tolerates_case_and_whitespace() {
+        // RFC 9110: range units are case-insensitive; whitespace between
+        // tokens may vary (R-B5).
+        assert!(content_range_start_matches("Bytes  10-14/100", 10));
+        assert!(content_range_start_matches("BYTES\t10-14/*", 10));
+        assert!(!content_range_start_matches("Bytes  100-104/200", 10));
+    }
+
+    #[test]
+    fn test_parse_unsatisfied_size_strict_form() {
+        assert_eq!(parse_unsatisfied_size("bytes */50"), Some(50));
+        assert_eq!(parse_unsatisfied_size("garbage"), None);
+        assert_eq!(parse_unsatisfied_size("bytes 0-4/100"), None);
+    }
+
+    #[test]
+    fn test_parse_unsatisfied_size_tolerates_unit_case() {
+        assert_eq!(parse_unsatisfied_size("Bytes */50"), Some(50));
+        assert_eq!(parse_unsatisfied_size("bytes  */7"), Some(7));
     }
 
     #[test]
