@@ -308,7 +308,7 @@ impl WebDavBackend {
                 .headers()
                 .get("content-range")
                 .and_then(|v| v.to_str().ok())
-                .and_then(parse_unsatisfied_size);
+                .and_then(super::common::parse_unsatisfied_size);
             super::common::drain_response(resp).await;
             return Ok(RangedRead::Unsatisfied { total });
         }
@@ -521,12 +521,6 @@ fn percent_decode_str(input: &str) -> String {
     percent_encoding::percent_decode_str(input)
         .decode_utf8_lossy()
         .into_owned()
-}
-
-/// Parse the total size from a 416 response's `Content-Range: bytes */<size>`.
-fn parse_unsatisfied_size(v: &str) -> Option<u64> {
-    let rest = v.trim().strip_prefix("bytes */")?;
-    rest.trim().parse().ok()
 }
 
 /// Outcome of one ranged GET attempt; a 416 is surfaced, not handled.

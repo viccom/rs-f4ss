@@ -17,6 +17,12 @@ pub(crate) fn should_retry_request(method: &reqwest::Method, _has_body: bool) ->
     matches!(method.as_str(), "GET" | "HEAD" | "PROPFIND")
 }
 
+/// Parse the total size from a 416 response's `Content-Range: bytes */<size>`.
+pub(crate) fn parse_unsatisfied_size(v: &str) -> Option<u64> {
+    let rest = v.trim().strip_prefix("bytes */")?;
+    rest.trim().parse().ok()
+}
+
 pub(crate) struct HttpClient {
     pub(crate) base_url: Url,
     pub(crate) client: Client,
