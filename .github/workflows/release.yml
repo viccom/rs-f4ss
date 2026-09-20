@@ -240,7 +240,7 @@ jobs:
           python3 -c "import json; json.load(open('latest.json'))" && echo "JSON OK"
           ls -la
       - name: Create or update GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.TAG }}
           name: rs-f4ss ${{ env.TAG }}
