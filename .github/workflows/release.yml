@@ -73,14 +73,14 @@ jobs:
           BINARY: ${{ matrix.binary }}
         run: cp "target/release/${BINARY}" "${BINARY}-${TAG}-linux-amd64"
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}-linux
           path: ${{ matrix.target }}-${{ env.TAG }}-x86_64-unknown-linux-gnu.tar.gz
           if-no-files-found: error
       - name: Upload bare binary artifact (CLI only)
         if: matrix.target == 'rs-f4ss'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}-linux-bare
           path: ${{ matrix.binary }}-${{ env.TAG }}-linux-amd64
@@ -149,14 +149,14 @@ jobs:
           BINARY: ${{ matrix.binary }}
         run: cp "target/x86_64-pc-windows-msvc/release/${BINARY}" "rs-f4ss-${TAG}-windows-amd64.exe"
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}-windows
           path: ${{ matrix.target }}-${{ env.TAG }}-x86_64-pc-windows-msvc.tar.gz
           if-no-files-found: error
       - name: Upload bare binary artifact (CLI only)
         if: matrix.target == 'rs-f4ss'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}-windows-bare
           path: rs-f4ss-${{ env.TAG }}-windows-amd64.exe
