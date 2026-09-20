@@ -197,7 +197,7 @@ jobs:
           RUST_LOG: rs_f4ss=warn
       - name: Run E2E (WinFsp mount)
         shell: pwsh
-        run: powershell -ExecutionPolicy Bypass -File tests/e2e.ps1 -DufsMountExe "./target/release/rs-f4ss.exe"
+        run: pwsh -ExecutionPolicy Bypass -File tests/e2e.ps1 -DufsMountExe "./target/release/rs-f4ss.exe"
       - name: Upload test artifacts
         if: failure()
         uses: actions/upload-artifact@v4
