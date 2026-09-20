@@ -62,11 +62,7 @@ pub fn hash_password(password: &str) -> String {
         hash = hasher.finalize().to_vec();
     }
 
-    format!(
-        "s256${}${}",
-        hex_encode(&salt),
-        hex_encode(&hash)
-    )
+    format!("s256${}${}", hex_encode(&salt), hex_encode(&hash))
 }
 
 /// Constant-time verification of a password against a stored hash.
@@ -185,8 +181,8 @@ pub(crate) fn normalize_share_auth(
     user: Option<String>,
     pass: Option<String>,
 ) -> (Option<String>, Option<String>) {
-    let had_empty = user.as_deref().is_some_and(str::is_empty)
-        || pass.as_deref().is_some_and(str::is_empty);
+    let had_empty =
+        user.as_deref().is_some_and(str::is_empty) || pass.as_deref().is_some_and(str::is_empty);
     let user = user.filter(|s| !s.is_empty());
     let pass = pass.filter(|s| !s.is_empty());
     if had_empty {

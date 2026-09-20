@@ -103,18 +103,12 @@ const BACKUP_SUFFIX: &str = ".update-backup";
 ///    backup over the (possibly damaged) install path and return the error.
 fn replace_with_backup(new_binary: &Path) -> Result<(), Error> {
     let exe = current_exe_resolved()?;
-    replace_with_backup_at(&exe, new_binary, |_| {
-        self_replace::self_replace(new_binary)
-    })
+    replace_with_backup_at(&exe, new_binary, |_| self_replace::self_replace(new_binary))
 }
 
 /// Core of the backup-replace cycle, parameterised for testability:
 /// `exe` is the install path, `do_replace` the replace operation.
-fn replace_with_backup_at<F>(
-    exe: &Path,
-    new_binary: &Path,
-    do_replace: F,
-) -> Result<(), Error>
+fn replace_with_backup_at<F>(exe: &Path, new_binary: &Path, do_replace: F) -> Result<(), Error>
 where
     F: FnOnce(&Path) -> std::io::Result<()>,
 {
@@ -399,8 +393,7 @@ mod tests {
 
         // The injected op simulates what self_replace does with new_binary;
         // here it just needs to succeed.
-        replace_with_backup_at(&exe, &new_binary, |_new_binary| Ok(()))
-            .unwrap();
+        replace_with_backup_at(&exe, &new_binary, |_new_binary| Ok(())).unwrap();
 
         // Backup sidecar is cleaned up after a successful replace.
         assert!(!dir.path().join("self.exe.update-backup").exists());

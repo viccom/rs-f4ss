@@ -130,7 +130,11 @@ impl ShareManager {
 
     pub fn add(&self, entry: ShareConfig) -> Result<String, String> {
         let (user, pass) = persistence::normalize_share_auth(&entry.id, entry.user, entry.pass);
-        let entry = ShareConfig { user, pass, ..entry };
+        let entry = ShareConfig {
+            user,
+            pass,
+            ..entry
+        };
 
         // Validate path exists
         let p = PathBuf::from(&entry.path);
@@ -189,9 +193,12 @@ impl ShareManager {
         if id != update.id {
             return Err("Cannot change share ID".to_string());
         }
-        let (user, pass) =
-            persistence::normalize_share_auth(&update.id, update.user, update.pass);
-        let update = ShareConfig { user, pass, ..update };
+        let (user, pass) = persistence::normalize_share_auth(&update.id, update.user, update.pass);
+        let update = ShareConfig {
+            user,
+            pass,
+            ..update
+        };
         let p = PathBuf::from(&update.path);
         if !p.is_dir() {
             return Err(format!(

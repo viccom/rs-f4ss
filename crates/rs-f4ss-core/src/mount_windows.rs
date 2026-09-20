@@ -471,10 +471,7 @@ impl<B: StorageBackend + 'static> FileSystemContext for WinFspAdapter<B> {
         let fh = context
             .handle
             .ok_or(FspError::IO(std::io::ErrorKind::InvalidInput))?;
-        tracing::debug!(
-            "[overwrite] \"{}\" alloc={allocation_size}",
-            context.path
-        );
+        tracing::debug!("[overwrite] \"{}\" alloc={allocation_size}", context.path);
         if allocation_size > Self::HYDRATE_MAX {
             context.record_write_failure();
             return Err(FspError::IO(std::io::ErrorKind::FileTooLarge));
@@ -1191,16 +1188,7 @@ mod tests {
             false,
         );
         let mut file_info = FileInfo::default();
-        FileSystemContext::overwrite(
-            &adapter,
-            &ctx,
-            0,
-            false,
-            0,
-            None,
-            &mut file_info,
-        )
-        .unwrap();
+        FileSystemContext::overwrite(&adapter, &ctx, 0, false, 0, None, &mut file_info).unwrap();
 
         assert_eq!(adapter.inner.handles.dirty_len(fh), Some(0));
         assert_eq!(file_info.file_size, 0);
@@ -1246,14 +1234,7 @@ mod tests {
             allocation_size: 4096,
             ..Default::default()
         };
-        FileSystemContext::set_file_size(
-            &adapter,
-            &ctx,
-            4096,
-            true,
-            &mut file_info,
-        )
-        .unwrap();
+        FileSystemContext::set_file_size(&adapter, &ctx, 4096, true, &mut file_info).unwrap();
 
         // File size unchanged, buffer untouched, no phantom dirty data.
         assert_eq!(file_info.file_size, 4);

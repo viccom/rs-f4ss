@@ -945,7 +945,8 @@ fn handle_serve(
                 "Refusing to serve on {listen} with default credentials (admin:admin). \
                  Change the password first (Web UI or `rs-f4ss serve` on 127.0.0.1), \
                  or bind to a loopback address, e.g. --listen 127.0.0.1:8080."
-            ).into());
+            )
+            .into());
         }
     }
 
@@ -1052,12 +1053,16 @@ fn handle_serve_stop(
     let client = reqwest::blocking::ClientBuilder::new()
         .timeout(Duration::from_secs(5))
         .build()?;
-    let resp = client.post(&url).basic_auth(user, Some(pass)).send().map_err(|e| {
-        format!(
-            "Cannot reach serve API at {url} — is it running? ({e}) \
+    let resp = client
+        .post(&url)
+        .basic_auth(user, Some(pass))
+        .send()
+        .map_err(|e| {
+            format!(
+                "Cannot reach serve API at {url} — is it running? ({e}) \
              If the process is stuck, stop it manually (e.g. Stop-Process -Id {pid})."
-        )
-    })?;
+            )
+        })?;
     let status = resp.status();
     if status.as_u16() == 401 {
         return Err("Unauthorized (401): wrong API credentials".into());
@@ -1565,7 +1570,12 @@ mod tests {
         for addr in ["127.0.0.1:8080", "localhost:8080", "[::1]:8080", "::1"] {
             assert!(is_loopback_addr(addr), "{addr} should be loopback");
         }
-        for addr in ["0.0.0.0:8080", "192.168.1.5:9000", "[::]:8080", "10.0.0.1:80"] {
+        for addr in [
+            "0.0.0.0:8080",
+            "192.168.1.5:9000",
+            "[::]:8080",
+            "10.0.0.1:80",
+        ] {
             assert!(!is_loopback_addr(addr), "{addr} should NOT be loopback");
         }
     }

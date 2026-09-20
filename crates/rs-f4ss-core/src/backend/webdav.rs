@@ -220,7 +220,9 @@ impl WebDavBackend {
                 match self.ranged_get_once(url, offset, clamped).await? {
                     RangedRead::Data(data) => Ok(data),
                     // A repeat 416 is answered as EOF, not retried again.
-                    RangedRead::Unsatisfied { total: second_total } => {
+                    RangedRead::Unsatisfied {
+                        total: second_total,
+                    } => {
                         tracing::warn!(
                             "[read] second 416 after clamped retry, answering EOF \
                              (empty read): url={url} offset={offset} \
@@ -1281,9 +1283,8 @@ mod read_path_tests {
             let _ = read_http_request(&mut stream).unwrap();
             // Declared size beyond the 64 MB fallback cap.
             let huge = 65 * 1024 * 1024u64;
-            let head = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {huge}\r\nConnection: close\r\n\r\n"
-            );
+            let head =
+                format!("HTTP/1.1 200 OK\r\nContent-Length: {huge}\r\nConnection: close\r\n\r\n");
             stream.write_all(head.as_bytes()).unwrap();
             stream.write_all(b"trailer").unwrap();
         });
@@ -1385,21 +1386,25 @@ mod read_path_tests {
             let (mut stream, _) = listener.accept().unwrap();
             let _ = read_http_request(&mut stream).unwrap();
             stream
-                .write_all(b"HTTP/1.1 503 Service Unavailable
+                .write_all(
+                    b"HTTP/1.1 503 Service Unavailable
 Content-Length: 0
 Connection: keep-alive
 
-")
+",
+                )
                 .unwrap();
             // Retry must arrive (same connection or new — accept both).
             let (mut s2, _) = listener.accept().unwrap();
             let _ = read_http_request(&mut s2).unwrap();
-            s2.write_all(b"HTTP/1.1 200 OK
+            s2.write_all(
+                b"HTTP/1.1 200 OK
 Content-Length: 2
 Connection: close
 
-ok")
-                .unwrap();
+ok",
+            )
+            .unwrap();
             tx.send(()).unwrap();
         });
 
@@ -1498,9 +1503,8 @@ ok")
                 let _ = read_http_request(&mut stream);
                 // Any response works to unblock a (wrongly issued) request;
                 // the signal is what fails the test in that case.
-                let _ = stream.write_all(
-                    b"HTTP/1.1 416\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                );
+                let _ = stream
+                    .write_all(b"HTTP/1.1 416\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
                 let _ = tx.send(());
             }
         });

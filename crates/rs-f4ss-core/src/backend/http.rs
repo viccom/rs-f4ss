@@ -82,7 +82,9 @@ impl HttpBackend {
                 match self.ranged_get_once(url, path, offset, clamped).await? {
                     RangedRead::Data(data) => Ok(data),
                     // A repeat 416 is answered as EOF, not retried again.
-                    RangedRead::Unsatisfied { total: second_total } => {
+                    RangedRead::Unsatisfied {
+                        total: second_total,
+                    } => {
                         tracing::warn!(
                             "[read] second 416 after clamped retry, answering EOF \
                              (empty read): url={url} offset={offset} \

@@ -491,9 +491,7 @@ pub(crate) async fn write_body_to_file(
     }
 
     let mut file = tokio::fs::File::create(path).await.map_err(|e| {
-        Box::new(
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("create: {e}")).into_response(),
-        )
+        Box::new((StatusCode::INTERNAL_SERVER_ERROR, format!("create: {e}")).into_response())
     })?;
 
     let mut stream = body.into_data_stream();
@@ -512,16 +510,12 @@ pub(crate) async fn write_body_to_file(
             return Err(Box::new(StatusCode::PAYLOAD_TOO_LARGE.into_response()));
         }
         file.write_all(&chunk).await.map_err(|e| {
-            Box::new(
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("write: {e}")).into_response(),
-            )
+            Box::new((StatusCode::INTERNAL_SERVER_ERROR, format!("write: {e}")).into_response())
         })?;
     }
 
     file.flush().await.map_err(|e| {
-        Box::new(
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("flush: {e}")).into_response(),
-        )
+        Box::new((StatusCode::INTERNAL_SERVER_ERROR, format!("flush: {e}")).into_response())
     })?;
 
     let status = if total == 0 {

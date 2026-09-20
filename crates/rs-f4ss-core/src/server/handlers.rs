@@ -44,13 +44,12 @@ fn content_disposition_for(name: &str) -> HeaderValue {
         .map(|c| if c.is_ascii() { c } else { '_' })
         .collect();
     let ascii_fallback = ascii_fallback.trim();
-    let ascii_fallback = if ascii_fallback.is_empty() || ascii_fallback == "."
-        || ascii_fallback == ".."
-    {
-        "download"
-    } else {
-        ascii_fallback
-    };
+    let ascii_fallback =
+        if ascii_fallback.is_empty() || ascii_fallback == "." || ascii_fallback == ".." {
+            "download"
+        } else {
+            ascii_fallback
+        };
 
     let mut value = format!("attachment; filename=\"{ascii_fallback}\"");
     if !trimmed.is_ascii() {
@@ -207,10 +206,7 @@ async fn handle_get_file(
         "content-type",
         HeaderValue::from_static(content_type_for(local_path)),
     );
-    hdrs.insert(
-        "content-length",
-        header_value_or_empty(&size.to_string()),
-    );
+    hdrs.insert("content-length", header_value_or_empty(&size.to_string()));
     hdrs.insert("accept-ranges", HeaderValue::from_static("bytes"));
     // nosniff stops browsers from second-guessing the MIME we declared.
     hdrs.insert(
@@ -567,7 +563,10 @@ mod tests {
     fn content_disposition_survives_control_chars() {
         for name in ["evil\nname.html", "evil\rname.html", "a\u{0}b.html"] {
             let v = content_disposition_for(name);
-            assert!(!v.as_bytes().iter().any(|b| b.is_ascii_control() && *b != b'\t'));
+            assert!(!v
+                .as_bytes()
+                .iter()
+                .any(|b| b.is_ascii_control() && *b != b'\t'));
         }
     }
 
@@ -591,7 +590,10 @@ mod tests {
         let v = content_disposition_for("报告.html");
         let s = v.to_str().expect("header must stay ASCII").to_owned();
         assert!(s.contains("filename=\"__.html\""), "raw: {s}");
-        assert!(s.contains("filename*=UTF-8''%E6%8A%A5%E5%91%8A.html"), "raw: {s}");
+        assert!(
+            s.contains("filename*=UTF-8''%E6%8A%A5%E5%91%8A.html"),
+            "raw: {s}"
+        );
     }
 
     #[test]
@@ -612,7 +614,14 @@ mod tests {
         // if the sanitised value were still invalid, to_str/insert would not
         // be reached. Exercise a representative spread.
         for name in [
-            "\n", "\r\n", "\u{7f}", "\u{1}", "a\"b", "a\\b", "  ", " line\nbreak.html ",
+            "\n",
+            "\r\n",
+            "\u{7f}",
+            "\u{1}",
+            "a\"b",
+            "a\\b",
+            "  ",
+            " line\nbreak.html ",
             "中文\n名字.svg",
         ] {
             let _ = content_disposition_for(name);
