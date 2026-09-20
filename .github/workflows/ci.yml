@@ -119,7 +119,11 @@ jobs:
           Write-Host "msiexec exit code: $($proc.ExitCode)"
           if ($proc.ExitCode -ne 0) { exit $proc.ExitCode }
       - name: Add WinFsp to PATH
-        run: Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\WinFsp\bin"
+        # WinFsp 2.0 MSI installs into "Program Files (x86)"; keep the other
+        # candidate as fallback so PATH is right either way.
+        run: |
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files (x86)\WinFsp\bin"
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\WinFsp\bin"
       - name: Stage WinFsp DLL next to test binaries
         # LoadLibraryW("winfsp-x64.dll") searches the exe directory first;
         # cargo's per-test binary lives in target\debug\deps\ so put a copy
@@ -172,7 +176,11 @@ jobs:
           $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i", $msi, "/qn", "/norestart" -Wait -PassThru
           if ($proc.ExitCode -ne 0) { exit $proc.ExitCode }
       - name: Add WinFsp to PATH
-        run: Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\WinFsp\bin"
+        # WinFsp 2.0 MSI installs into "Program Files (x86)"; keep the other
+        # candidate as fallback so PATH is right either way.
+        run: |
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files (x86)\WinFsp\bin"
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\WinFsp\bin"
       - name: Install dufs (test WebDAV server)
         run: |
           for ($i = 1; $i -le 5; $i++) {
@@ -195,6 +203,20 @@ jobs:
         run: cargo build --release --all-features
         env:
           RUST_LOG: rs_f4ss=warn
+      - name: Stage WinFsp DLL next to binary
+        # rs-f4ss loads winfsp-x64.dll via standard DLL search (exe dir first);
+        # staging a copy removes any dependence on the MSI install location.
+        run: |
+          $dll = @(
+            "C:\Program Files (x86)\WinFsp\bin\winfsp-x64.dll",
+            "C:\Program Files\WinFsp\bin\winfsp-x64.dll"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if ($dll) {
+            Copy-Item $dll -Destination ".\target\release\"
+            Write-Host "staged: $dll -> target\release\"
+          } else {
+            Write-Host "::warning::winfsp-x64.dll not found in known install dirs"
+          }
       - name: Run E2E (WinFsp mount)
         shell: pwsh
         run: pwsh -ExecutionPolicy Bypass -File tests/e2e.ps1 -DufsMountExe "./target/release/rs-f4ss.exe"

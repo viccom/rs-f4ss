@@ -134,13 +134,34 @@ function StartMount {
     $mountArgs = @("http://127.0.0.1:$Port", "$Drive`:") + $ExtraArgs
     Info "Mounting :$Port -> $($script:MountPoint) $($ExtraArgs -join ' ')"
 
+    # Capture stderr so a mount that dies instantly (e.g. missing WinFsp DLL)
+    # leaves a diagnosable log behind; TEMP\rs-f4ss-*.log is uploaded on failure.
+    $stderrLog = Join-Path $env:TEMP "rs-f4ss-e2e-mount.log"
     $script:MountProcess = Start-Process -FilePath $DufsMountExe `
-        -ArgumentList $mountArgs -WindowStyle Minimized -PassThru
+        -ArgumentList $mountArgs -NoNewWindow -PassThru `
+        -RedirectStandardError $stderrLog
 
-    Start-Sleep -Seconds 3
+    # Poll for the drive instead of a fixed sleep: cold CI runners can take
+    # far longer than 3s to bring the WinFsp volume up.
+    $deadline = (Get-Date).AddSeconds(30)
+    while (-not (Test-Path $script:MountPoint)) {
+        if ($script:MountProcess.HasExited) { break }
+        if ((Get-Date) -ge $deadline) { break }
+        Start-Sleep -Milliseconds 500
+    }
 
     if (-not (Test-Path $script:MountPoint)) {
-        Write-Host "${RED}FATAL: mount not active${NC}"; exit 1
+        Write-Host "${RED}FATAL: mount not active${NC}"
+        if ($script:MountProcess.HasExited) {
+            Write-Host "mount process exited, code=$($script:MountProcess.ExitCode)"
+        } else {
+            Write-Host "mount process still running after 30s without an active drive"
+        }
+        if (Test-Path $stderrLog) {
+            Write-Host "--- mount stderr ($stderrLog) ---"
+            Get-Content $stderrLog | ForEach-Object { Write-Host "  | $_" }
+        }
+        exit 1
     }
     Info "WinFsp mount active (PID=$($script:MountProcess.Id))"
 }
