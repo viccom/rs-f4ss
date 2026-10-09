@@ -222,7 +222,7 @@ jobs:
         run: pwsh -ExecutionPolicy Bypass -File tests/e2e.ps1 -DufsMountExe "./target/release/rs-f4ss.exe"
       - name: Upload test artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: e2e-windows-logs
           path: |
@@ -339,7 +339,7 @@ jobs:
         run: bash tests/e2e-share.sh
       - name: Upload test artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: e2e-logs
           path: |
