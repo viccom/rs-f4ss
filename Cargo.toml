@@ -40,7 +40,7 @@ bytes = "1"
 axum = "0.8"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 sha2 = "0.10"
-dirs = "6"
+dirs = "7"
 futures-util = "0.3"
 tokio-util = { version = "0.7", features = ["io"] }
 selfupdater = { path = "crates/selfupdater", default-features = false, features = ["tls-rustls"] }
